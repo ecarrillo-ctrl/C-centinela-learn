@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import PDFDocument from 'pdfkit';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { generateQuizFromCourse, generateContentDesign, analyzeContent } from '../services/ai-quiz-generator.js';
+import { getFileInfo, getFileStream } from '../services/storage-service.js';
 
 const router = Router();
 
@@ -146,6 +148,13 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
     const score = total > 0 ? Math.round((correct / total) * 100) : 0;
     const passed = score >= 70; // 70% para aprobar
 
+    // Se calcula ANTES de insertar el intento actual: si no hay intentos previos, este es el primero.
+    const { rows: priorAttempts } = await query(
+      'SELECT COUNT(*) AS cnt FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2',
+      [req.user.id, req.params.courseId]
+    );
+    const isFirstAttempt = parseInt(priorAttempts[0]?.cnt || 0, 10) === 0;
+
     await query(
       'INSERT INTO user_quiz_attempts (user_id, course_id, score, passed, answers_json) VALUES (:1, :2, :3, :4, :5)',
       [req.user.id, req.params.courseId, score, passed ? 1 : 0, JSON.stringify(answers)]
@@ -166,6 +175,8 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
       passed,
       correct,
       total,
+      is_first_attempt: isFirstAttempt,
+      diploma_eligible: passed && isFirstAttempt,
       message: passed ? 'Aprobado. Capacitación completada.' : `Reprobado (${score}%). Necesita 70% para aprobar. Puede intentar de nuevo.`,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -182,7 +193,7 @@ router.post('/courses/:courseId/acknowledge', authenticateToken, async (req, res
     );
 
     if (existing.length > 0) {
-      return res.json({ success: true, message: 'Ya confirmó este curso anteriormente', already: true });
+      return res.json({ success: true, message: 'Ya confirmó este curso anteriormente', already: true, diploma_eligible: true });
     }
 
     await query(
@@ -205,7 +216,7 @@ router.post('/courses/:courseId/acknowledge', authenticateToken, async (req, res
       );
     }
 
-    res.json({ success: true, message: 'Confirmación de aprendizaje registrada' });
+    res.json({ success: true, message: 'Confirmación de aprendizaje registrada', diploma_eligible: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -316,6 +327,133 @@ router.post('/admin/ai/test', authenticateToken, requireAdmin, async (req, res) 
     res.json({ success: true, modelId, raw_response: raw.substring(0, 2000), prompt_sent: testMsg.substring(0, 200) });
   } catch (err) {
     res.status(500).json({ error: err.message, name: err.name, metadata: err.$metadata || null });
+  }
+});
+
+// ============ USUARIO: Descargar diploma de finalización ============
+router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    const { rows: enrollments } = await query(
+      `SELECT completed_at FROM training_enrollments
+       WHERE user_id = :1 AND course_id = :2 AND status = 'completed'
+       ORDER BY completed_at DESC FETCH FIRST 1 ROWS ONLY`,
+      [req.user.id, courseId]
+    );
+    if (enrollments.length === 0) {
+      return res.status(403).json({ error: 'Aún no ha completado esta capacitación' });
+    }
+
+    const { rows: attempts } = await query(
+      'SELECT passed FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2 ORDER BY attempted_at ASC FETCH FIRST 1 ROWS ONLY',
+      [req.user.id, courseId]
+    );
+    const hadQuiz = attempts.length > 0;
+    const passedFirstAttempt = !hadQuiz || attempts[0].passed === 1;
+    if (!passedFirstAttempt) {
+      return res.status(403).json({ error: 'El diploma solo se otorga si aprobó el quiz en su primer intento' });
+    }
+
+    const { rows: courseRows } = await query('SELECT title FROM courses WHERE id = :1', [courseId]);
+    if (courseRows.length === 0) return res.status(404).json({ error: 'Curso no encontrado' });
+
+    const { rows: userRows } = await query('SELECT display_name FROM users WHERE id = :1', [req.user.id]);
+    const userName = userRows[0]?.display_name || req.user.displayName || 'Usuario';
+    const courseTitle = courseRows[0].title;
+    const completedAt = enrollments[0].completed_at;
+
+    const { rows: settingRows } = await query(
+      "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('diploma_signer_name', 'diploma_signer_title', 'org_name')"
+    );
+    const settingsMap = {};
+    for (const s of settingRows) settingsMap[s.setting_key] = s.setting_value;
+    const signerName = settingsMap.diploma_signer_name || 'Nombre del Director de TI';
+    const signerTitle = settingsMap.diploma_signer_title || 'Director de Tecnología de la Información';
+    const orgName = settingsMap.org_name || 'AgroAmérica';
+
+    // Firma escaneada (opcional) — si el admin no ha subido ninguna, se usa el nombre en cursiva.
+    let signatureBuffer = null;
+    try {
+      const info = await getFileInfo('branding/signature.png');
+      if (info) {
+        const { body } = await getFileStream('branding/signature.png');
+        const chunks = [];
+        for await (const chunk of body) chunks.push(chunk);
+        signatureBuffer = Buffer.concat(chunks);
+      }
+    } catch { /* sin firma escaneada — se usa el fallback de texto */ }
+
+    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0 });
+    const chunks = [];
+    doc.on('data', c => chunks.push(c));
+    doc.on('end', () => {
+      const pdf = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="Diploma-${courseTitle.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
+      res.send(pdf);
+    });
+
+    const navy = '#001B71';
+    const green = '#00BC70';
+    const pageW = doc.page.width;
+    const pageH = doc.page.height;
+
+    // Marco decorativo
+    doc.rect(20, 20, pageW - 40, pageH - 40).lineWidth(3).stroke(navy);
+    doc.rect(30, 30, pageW - 60, pageH - 60).lineWidth(1).stroke(green);
+
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(12)
+      .text(orgName.toUpperCase(), 0, 70, { align: 'center' });
+
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(34)
+      .text('Diploma de Capacitación', 0, 110, { align: 'center' });
+
+    doc.moveTo(pageW / 2 - 100, 160).lineTo(pageW / 2 + 100, 160).lineWidth(1.5).stroke(green);
+
+    doc.fillColor('#555').font('Helvetica').fontSize(13)
+      .text('Se otorga el presente diploma a', 0, 190, { align: 'center' });
+
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(28)
+      .text(userName, 0, 220, { align: 'center' });
+
+    const completionText = hadQuiz
+      ? `por haber completado satisfactoriamente la capacitación, aprobando el examen en su primer intento`
+      : `por haber completado satisfactoriamente la capacitación`;
+
+    doc.fillColor('#555').font('Helvetica').fontSize(13)
+      .text(completionText, 100, 265, { align: 'center', width: pageW - 200 });
+
+    doc.fillColor(navy).font('Helvetica-Bold').fontSize(18)
+      .text(`"${courseTitle}"`, 100, 295, { align: 'center', width: pageW - 200 });
+
+    const dateStr = completedAt ? new Date(completedAt).toLocaleDateString('es-GT', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
+    doc.fillColor('#888').font('Helvetica').fontSize(11)
+      .text(`Fecha de finalización: ${dateStr}`, 0, 335, { align: 'center' });
+
+    // Firma
+    const sigY = pageH - 130;
+    const sigCenterX = pageW / 2;
+    if (signatureBuffer) {
+      try {
+        doc.image(signatureBuffer, sigCenterX - 60, sigY - 45, { width: 120, height: 45 });
+      } catch { /* imagen inválida — se ignora, solo queda la línea y el nombre */ }
+    } else {
+      doc.font('Helvetica-Oblique').fontSize(20).fillColor(navy)
+        .text(signerName, sigCenterX - 100, sigY - 30, { width: 200, align: 'center' });
+    }
+    doc.moveTo(sigCenterX - 100, sigY).lineTo(sigCenterX + 100, sigY).lineWidth(1).stroke('#999');
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(navy)
+      .text(signerName, sigCenterX - 150, sigY + 8, { width: 300, align: 'center' });
+    doc.font('Helvetica').fontSize(9).fillColor('#777')
+      .text(signerTitle, sigCenterX - 150, sigY + 22, { width: 300, align: 'center' });
+
+    doc.font('Helvetica').fontSize(8).fillColor('#aaa')
+      .text(`Generado por eLearning ${orgName} — Plataforma de Concientización en Ciberseguridad`, 0, pageH - 45, { align: 'center' });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

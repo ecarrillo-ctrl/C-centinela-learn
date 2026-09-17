@@ -11,6 +11,7 @@ export default function CourseViewer({ course, onClose }) {
   const [lockedQuestions, setLockedQuestions] = useState(new Set());
   const [quizResult, setQuizResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [downloadingDiploma, setDownloadingDiploma] = useState(false);
 
   const courseId = course.id || course.ID;
   const courseType = course.type || course.course_type || course.COURSE_TYPE;
@@ -73,6 +74,29 @@ export default function CourseViewer({ course, onClose }) {
       if (data.passed) setStep(STEPS.SUMMARY);
     } catch (err) { alert(err.response?.data?.error || 'Error al enviar'); }
     setSubmitting(false);
+  }
+
+  async function downloadDiploma() {
+    setDownloadingDiploma(true);
+    try {
+      const response = await api.get(`/courses/${courseId}/diploma`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Diploma-${courseTitle}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      let message = 'No se pudo generar el diploma.';
+      if (err.response?.data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await err.response.data.text());
+          message = parsed.error || message;
+        } catch { /* respuesta no era JSON */ }
+      }
+      alert(message);
+    }
+    setDownloadingDiploma(false);
   }
 
   function retryQuiz() {
@@ -354,6 +378,11 @@ export default function CourseViewer({ course, onClose }) {
               <p className="text-sm text-gray-500 mb-6">
                 Su progreso ha sido registrado. Siga aplicando estos conocimientos en su trabajo diario.
               </p>
+              <button onClick={downloadDiploma} disabled={downloadingDiploma}
+                className="w-full mb-3 px-8 py-3 rounded-lg text-sm font-bold text-white transition-all hover:scale-[1.02] disabled:opacity-50 flex items-center justify-center gap-2"
+                style={{ backgroundColor: '#00BC70' }}>
+                {'\u{1F4DC}'} {downloadingDiploma ? 'Generando diploma...' : 'Descargar diploma'}
+              </button>
               <button onClick={onClose}
                 className="px-8 py-3 rounded-lg text-sm font-bold text-white transition-all hover:scale-105"
                 style={{ backgroundColor: '#001B71' }}>

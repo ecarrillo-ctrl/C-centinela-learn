@@ -103,6 +103,39 @@ router.get('/settings/logo', async (_req, res) => {
   }
 });
 
+// ============ FIRMA PARA DIPLOMAS (S3) ============
+
+router.post('/settings/signature', upload.single('signature'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Archivo de firma requerido' });
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    if (!['.png', '.jpg', '.jpeg'].includes(ext)) {
+      return res.status(400).json({ error: 'Solo PNG o JPG' });
+    }
+
+    const contentType = `image/${ext.replace('.', '').replace('jpg', 'jpeg')}`;
+    // Siempre se guarda como .png (pdfkit acepta PNG/JPEG por contenido, no por extensión del key)
+    await uploadFile('branding/signature.png', req.file.buffer, contentType);
+
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type, details_json)
+       VALUES (:1, 'signature_upload', 'settings', :2)`,
+      [req.user.id, JSON.stringify({ filename: req.file.originalname })]
+    );
+
+    res.json({ success: true, url: '/api/admin/settings/signature' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/settings/signature', async (_req, res) => {
+  try {
+    const url = await getPresignedUrl('branding/signature.png', 3600);
+    res.redirect(302, url);
+  } catch (err) {
+    res.status(404).json({ error: 'Firma no configurada' });
+  }
+});
+
 // ============ ORGANIZATIONS ============
 
 router.get('/organizations', async (_req, res) => {

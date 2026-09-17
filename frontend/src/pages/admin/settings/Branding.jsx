@@ -7,9 +7,21 @@ export default function Branding() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    api.get('/admin/settings?category=branding')
-      .then(r => { setSettings(r.data.data?.branding || {}); setLoaded(true); })
-      .catch(() => setLoaded(true));
+    Promise.all([
+      api.get('/admin/settings?category=branding'),
+      // Los ajustes de diploma pueden haber quedado guardados bajo la categoría
+      // "general" (comportamiento del PUT genérico), así que se leen aparte por
+      // clave para no perderlos ni mostrarlos vacíos tras la primera vez que se guardan.
+      api.get('/admin/settings/diploma_signer_name').catch(() => null),
+      api.get('/admin/settings/diploma_signer_title').catch(() => null),
+    ]).then(([branding, signerName, signerTitle]) => {
+      setSettings({
+        ...(branding.data.data?.branding || {}),
+        ...(signerName?.data?.data ? { diploma_signer_name: signerName.data.data.setting_value } : {}),
+        ...(signerTitle?.data?.data ? { diploma_signer_title: signerTitle.data.data.setting_value } : {}),
+      });
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
   }, []);
 
   const save = async () => {
@@ -30,6 +42,17 @@ export default function Branding() {
       await api.post('/admin/settings/logo', fd);
       alert('Logo subido correctamente');
     } catch { alert('Error al subir logo'); }
+  };
+
+  const handleSignatureUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('signature', file);
+    try {
+      await api.post('/admin/settings/signature', fd);
+      alert('Firma subida correctamente');
+    } catch { alert('Error al subir la firma'); }
   };
 
   if (!loaded) return <div className="text-gray-400 py-8 text-center">Cargando...</div>;
@@ -83,6 +106,31 @@ export default function Branding() {
           <textarea value={settings.branding_email_footer || ''} onChange={e => setSettings({ ...settings, branding_email_footer: e.target.value })}
             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1 h-20"
             placeholder="AgroAmérica — Todos los derechos reservados" />
+        </div>
+
+        <div className="pt-4 border-t border-gray-100">
+          <label className="text-sm font-medium text-gray-600 mb-2 block">Diplomas de capacitación</label>
+          <p className="text-xs text-gray-400 mb-3">
+            Nombre, cargo y firma que aparecen en el diploma que se genera cuando un usuario completa una
+            capacitación (aprobando el quiz, si tiene, en su primer intento).
+          </p>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-xs text-gray-500">Nombre del firmante</label>
+              <input value={settings.diploma_signer_name || ''} onChange={e => setSettings({ ...settings, diploma_signer_name: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Nombre del Director de TI" />
+            </div>
+            <div>
+              <label className="text-xs text-gray-500">Cargo del firmante</label>
+              <input value={settings.diploma_signer_title || ''} onChange={e => setSettings({ ...settings, diploma_signer_title: e.target.value })}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Director de Tecnología de la Información" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-500">Firma escaneada (opcional)</label>
+            <input type="file" accept=".png,.jpg,.jpeg" onChange={handleSignatureUpload} className="w-full text-sm mt-1" />
+            <p className="text-xs text-gray-400 mt-1">PNG o JPG con fondo transparente o blanco. Si no sube ninguna, el diploma muestra el nombre en cursiva.</p>
+          </div>
         </div>
 
         <div className="pt-4 border-t border-gray-100">
