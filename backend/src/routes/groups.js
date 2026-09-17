@@ -64,6 +64,92 @@ router.get('/groups/all', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Detalle de un grupo (personalizado u OU): datos básicos + desglose real de
+// riesgo por origen (risk_score_events.source), últimos 90 días.
+const RISK_SOURCE_LABELS = {
+  phishing: 'Phishing simulado',
+  training: 'Capacitación',
+  pab: 'Reportes de phishing (PAB)',
+  manual: 'Ajustes manuales',
+  decay: 'Recuperación por tiempo',
+};
+
+router.get('/groups/:type/:rawId/detail', async (req, res) => {
+  try {
+    const { type, rawId } = req.params;
+    if (type !== 'ou' && type !== 'custom') return res.status(400).json({ error: 'Tipo inválido' });
+
+    let info;
+    let sourceRows;
+
+    if (type === 'ou') {
+      const { rows } = await query(
+        `SELECT ou.name, ou.created_at, ou.is_archived,
+          (SELECT COUNT(*) FROM users u WHERE u.org_unit_id = ou.id AND u.status = 'active') AS member_count,
+          (SELECT ROUND(AVG(u.risk_score), 1) FROM users u WHERE u.org_unit_id = ou.id AND u.status = 'active') AS avg_risk_score
+         FROM org_units ou WHERE ou.id = :1`,
+        [rawId]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: 'OU no encontrada' });
+      info = rows[0];
+
+      const { rows: src } = await query(
+        `SELECT rse.source, ROUND(SUM(rse.delta), 1) AS total_delta, COUNT(*) AS event_count
+         FROM risk_score_events rse
+         JOIN users u ON u.id = rse.user_id
+         WHERE u.org_unit_id = :1 AND rse.created_at >= SYSTIMESTAMP - INTERVAL '90' DAY
+         GROUP BY rse.source`,
+        [rawId]
+      );
+      sourceRows = src;
+    } else {
+      const { rows } = await query(
+        `SELECT cg.name, cg.created_at, cg.is_archived,
+          (SELECT COUNT(*) FROM custom_group_members cgm WHERE cgm.group_id = cg.id) AS member_count,
+          (SELECT ROUND(AVG(u.risk_score), 1) FROM custom_group_members cgm JOIN users u ON cgm.user_id = u.id
+             WHERE cgm.group_id = cg.id) AS avg_risk_score
+         FROM custom_groups cg WHERE cg.id = :1`,
+        [rawId]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: 'Grupo no encontrado' });
+      info = rows[0];
+
+      const { rows: src } = await query(
+        `SELECT rse.source, ROUND(SUM(rse.delta), 1) AS total_delta, COUNT(*) AS event_count
+         FROM risk_score_events rse
+         JOIN custom_group_members cgm ON cgm.user_id = rse.user_id
+         WHERE cgm.group_id = :1 AND rse.created_at >= SYSTIMESTAMP - INTERVAL '90' DAY
+         GROUP BY rse.source`,
+        [rawId]
+      );
+      sourceRows = src;
+    }
+
+    const score = parseFloat(info.avg_risk_score) || 0;
+    const level = score < 20 ? 'bajo' : score < 40 ? 'medio' : 'alto';
+
+    const sources = ['phishing', 'training', 'pab', 'manual', 'decay'].map(s => {
+      const row = sourceRows.find(r => r.source === s);
+      return {
+        source: s,
+        label: RISK_SOURCE_LABELS[s],
+        total_delta: row ? parseFloat(row.total_delta) : 0,
+        event_count: row ? parseInt(row.event_count, 10) : 0,
+      };
+    });
+
+    res.json({
+      name: info.name,
+      created_at: info.created_at,
+      is_archived: info.is_archived,
+      member_count: info.member_count,
+      avg_risk_score: score,
+      level,
+      sources,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Archivar / desarchivar en lote (grupos personalizados y/o OUs, mezclados)
 router.post('/groups/set-archived', async (req, res) => {
   try {

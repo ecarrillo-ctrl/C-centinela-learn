@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../../../lib/api';
 
 const AD_DOMAIN = 'CORPORATIVOAGROAMERICA.CORP';
@@ -17,12 +18,6 @@ export default function Groups() {
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [groupForm, setGroupForm] = useState({ name: '', description: '' });
   const [editingGroup, setEditingGroup] = useState(null);
-
-  const [selectedGroup, setSelectedGroup] = useState(null);
-  const [groupMembers, setGroupMembers] = useState([]);
-  const [showAddMembers, setShowAddMembers] = useState(false);
-  const [memberSearch, setMemberSearch] = useState('');
-  const [memberResults, setMemberResults] = useState([]);
 
   useEffect(() => { loadGroups(); }, [filterStatus, filterType]);
 
@@ -100,7 +95,6 @@ export default function Groups() {
       await api.delete(`/admin/groups/${group.raw_id}/all-members`);
       setOpenMenu(null);
       loadGroups();
-      if (selectedGroup?.id === group.id) viewGroup(group);
     } catch (err) { alert(err.response?.data?.error || 'Error'); }
   }
 
@@ -149,46 +143,6 @@ export default function Groups() {
       setEditingGroup(null);
       loadGroups();
     } catch (err) { alert(err.response?.data?.error || 'Error'); }
-  }
-
-  async function viewGroup(group) {
-    setSelectedGroup(group);
-    setOpenMenu(null);
-    try {
-      const params = new URLSearchParams({ group: group.id, status: '', limit: 5000 });
-      const { data } = await api.get(`/admin/users?${params}`);
-      setGroupMembers(data.data || []);
-    } catch { }
-  }
-
-  async function removeFromGroup(userId) {
-    if (!selectedGroup || selectedGroup.type !== 'custom') return;
-    try {
-      await api.delete(`/admin/groups/${selectedGroup.raw_id}/members/${userId}`);
-      viewGroup(selectedGroup);
-      loadGroups();
-    } catch { }
-  }
-
-  async function searchMembers(q) {
-    setMemberSearch(q);
-    if (q.length < 2) { setMemberResults([]); return; }
-    try {
-      const params = new URLSearchParams({ search: q, limit: 10, offset: 0, status: 'active' });
-      const { data } = await api.get(`/admin/users?${params}`);
-      const existingIds = new Set(groupMembers.map(m => m.id));
-      setMemberResults((data.data || []).filter(u => !existingIds.has(u.id)));
-    } catch { }
-  }
-
-  async function addMemberToGroup(userId) {
-    if (!selectedGroup || selectedGroup.type !== 'custom') return;
-    try {
-      await api.post(`/admin/groups/${selectedGroup.raw_id}/members`, { user_ids: [userId] });
-      setMemberResults(prev => prev.filter(u => u.id !== userId));
-      viewGroup(selectedGroup);
-      loadGroups();
-    } catch { }
   }
 
   const SortHeader = ({ col, label, align = 'left' }) => (
@@ -257,10 +211,10 @@ export default function Groups() {
               <tr key={g.id} className="border-t border-gray-50 hover:bg-gray-50">
                 <td className="p-3"><input type="checkbox" checked={selected.has(g.id)} onChange={() => toggleSelect(g.id)} className="w-4 h-4 rounded" /></td>
                 <td className="p-3">
-                  <button onClick={() => viewGroup(g)} className="text-left hover:underline flex items-center gap-1.5" style={{ color: '#2B5597' }}>
+                  <Link to={`/admin/users/groups/${g.type}/${g.raw_id}`} className="text-left hover:underline flex items-center gap-1.5" style={{ color: '#2B5597' }}>
                     <span className="text-xs">{g.type === 'ou' ? '\u{1F5A5}️' : '\u{1F4CB}'}</span>
                     <span>{g.type === 'ou' ? `${AD_DOMAIN}\\${g.name}` : g.name}</span>
-                  </button>
+                  </Link>
                   {g.is_archived === 1 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Archivado</span>}
                 </td>
                 <td className="p-3 text-xs text-gray-500">{g.created_at ? new Date(g.created_at).toLocaleDateString('es-GT') : '—'}</td>
@@ -296,39 +250,6 @@ export default function Groups() {
           </tbody>
         </table>
       </div>
-
-      {selectedGroup && (
-        <div className="bg-white rounded-xl border border-gray-100 p-4">
-          <div className="flex justify-between items-center mb-3">
-            <h3 className="font-bold" style={{ color: '#001B71' }}>
-              {selectedGroup.type === 'ou' ? `${AD_DOMAIN}\\${selectedGroup.name}` : selectedGroup.name}
-            </h3>
-            <div className="flex items-center gap-2">
-              {selectedGroup.type === 'custom' && (
-                <button onClick={() => setShowAddMembers(true)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style={{ backgroundColor: '#00BC70' }}>
-                  + Agregar miembros
-                </button>
-              )}
-              <button onClick={() => setSelectedGroup(null)} className="text-gray-400 hover:text-gray-600">{'✕'}</button>
-            </div>
-          </div>
-          <p className="text-xs text-gray-400 mb-3">{groupMembers.length} miembros{selectedGroup.type === 'ou' ? ' (definidos por Active Directory)' : ''}</p>
-          <div className="max-h-64 overflow-auto space-y-1">
-            {groupMembers.map(m => (
-              <div key={m.id} className="flex justify-between items-center p-2 rounded hover:bg-gray-50">
-                <div>
-                  <p className="text-sm font-medium">{m.display_name}</p>
-                  <p className="text-xs text-gray-400">{m.email}</p>
-                </div>
-                {selectedGroup.type === 'custom' && (
-                  <button onClick={() => removeFromGroup(m.id)} className="text-xs text-red-400 hover:text-red-600">Quitar</button>
-                )}
-              </div>
-            ))}
-            {groupMembers.length === 0 && <p className="text-xs text-gray-400 text-center py-4">Sin miembros.</p>}
-          </div>
-        </div>
-      )}
 
       {showNewGroup && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setShowNewGroup(false)}>
@@ -369,43 +290,6 @@ export default function Groups() {
               </div>
               <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>Guardar cambios</button>
             </form>
-          </div>
-        </div>
-      )}
-
-      {showAddMembers && selectedGroup && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => { setShowAddMembers(false); setMemberSearch(''); setMemberResults([]); }}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-title text-lg font-bold" style={{ color: '#001B71' }}>
-                Agregar miembros a: {selectedGroup.name}
-              </h3>
-              <button onClick={() => { setShowAddMembers(false); setMemberSearch(''); setMemberResults([]); }}
-                className="text-gray-400 hover:text-gray-600 text-xl">{'✕'}</button>
-            </div>
-            <div className="mb-4">
-              <input value={memberSearch} onChange={e => searchMembers(e.target.value)}
-                placeholder="Buscar usuario por nombre o email..."
-                className="w-full border rounded-lg px-3 py-2 text-sm" autoFocus />
-              <p className="text-xs text-gray-400 mt-1">Escriba al menos 2 caracteres para buscar</p>
-            </div>
-            <div className="max-h-64 overflow-auto space-y-1">
-              {memberResults.map(u => (
-                <div key={u.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50">
-                  <div>
-                    <p className="text-sm font-medium" style={{ color: '#001B71' }}>{u.display_name}</p>
-                    <p className="text-xs text-gray-400">{u.email} · {u.org_unit_name || '—'}</p>
-                  </div>
-                  <button onClick={() => addMemberToGroup(u.id)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style={{ backgroundColor: '#00BC70' }}>
-                    Agregar
-                  </button>
-                </div>
-              ))}
-              {memberSearch.length >= 2 && memberResults.length === 0 && (
-                <p className="text-xs text-gray-400 text-center py-4">No se encontraron usuarios</p>
-              )}
-            </div>
           </div>
         </div>
       )}

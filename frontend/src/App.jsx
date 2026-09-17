@@ -31,6 +31,7 @@ import PersonalSettings from './pages/admin/settings/PersonalSettings';
 import UsersLayout from './pages/admin/users/UsersLayout';
 import UsersList from './pages/admin/users/UsersList';
 import UserGroups from './pages/admin/users/Groups';
+import GroupDetail from './pages/admin/users/GroupDetail';
 import UserImport from './pages/admin/users/Import';
 import UserProvisioning from './pages/admin/users/Provisioning';
 import UserMerge from './pages/admin/users/Merge';
@@ -82,6 +83,7 @@ export default function App() {
             <Route path="/admin/users" element={<UsersLayout />}>
               <Route index element={<UsersList />} />
               <Route path="groups" element={<UserGroups />} />
+              <Route path="groups/:type/:rawId" element={<GroupDetail />} />
               <Route path="import" element={<UserImport />} />
               <Route path="provisioning" element={<UserProvisioning />} />
               <Route path="merge" element={<UserMerge />} />
