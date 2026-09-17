@@ -169,12 +169,12 @@ export default function Branding() {
             <div>
               <label className="text-xs text-gray-500">Nombre del firmante</label>
               <input value={settings.diploma_signer_name || ''} onChange={e => setSettings({ ...settings, diploma_signer_name: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Eddy Aguilar" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Comité de Ciberseguridad" />
             </div>
             <div>
               <label className="text-xs text-gray-500">Cargo del firmante</label>
               <input value={settings.diploma_signer_title || ''} onChange={e => setSettings({ ...settings, diploma_signer_title: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Director TI Corporativo" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="AgroAmérica" />
             </div>
           </div>
           <div>

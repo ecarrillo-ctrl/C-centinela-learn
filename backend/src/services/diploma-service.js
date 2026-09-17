@@ -66,8 +66,10 @@ export async function generateDiplomaPdf(userId, courseId, fallbackDisplayName =
   );
   const settingsMap = {};
   for (const s of settingRows) settingsMap[s.setting_key] = s.setting_value;
-  const signerName = settingsMap.diploma_signer_name || 'Eddy Aguilar';
-  const signerTitle = settingsMap.diploma_signer_title || 'Director TI Corporativo';
+  // Placeholder hasta que se defina un firmante real (nombre + firma escaneada
+  // en Ajustes > Marca): se atribuye al comité en vez de a una persona.
+  const signerName = settingsMap.diploma_signer_name || 'Comité de Ciberseguridad';
+  const signerTitle = settingsMap.diploma_signer_title || 'AgroAmérica';
   const orgName = settingsMap.org_name || 'AgroAmérica';
   const logoSize = Math.min(220, Math.max(20, parseInt(settingsMap.diploma_logo_size, 10) || 90));
 
