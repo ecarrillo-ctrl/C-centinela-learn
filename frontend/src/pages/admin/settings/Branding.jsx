@@ -5,6 +5,7 @@ export default function Branding() {
   const [settings, setSettings] = useState({});
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [logoPreviewUrl, setLogoPreviewUrl] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -14,14 +15,20 @@ export default function Branding() {
       // clave para no perderlos ni mostrarlos vacíos tras la primera vez que se guardan.
       api.get('/admin/settings/diploma_signer_name').catch(() => null),
       api.get('/admin/settings/diploma_signer_title').catch(() => null),
-    ]).then(([branding, signerName, signerTitle]) => {
+      api.get('/admin/settings/diploma_logo_size').catch(() => null),
+    ]).then(([branding, signerName, signerTitle, logoSize]) => {
       setSettings({
         ...(branding.data.data?.branding || {}),
         ...(signerName?.data?.data ? { diploma_signer_name: signerName.data.data.setting_value } : {}),
         ...(signerTitle?.data?.data ? { diploma_signer_title: signerTitle.data.data.setting_value } : {}),
+        ...(logoSize?.data?.data ? { diploma_logo_size: logoSize.data.data.setting_value } : {}),
       });
       setLoaded(true);
     }).catch(() => setLoaded(true));
+
+    api.get('/admin/settings/logo', { responseType: 'blob' })
+      .then(r => setLogoPreviewUrl(URL.createObjectURL(r.data)))
+      .catch(() => setLogoPreviewUrl(null));
   }, []);
 
   const save = async () => {
@@ -40,6 +47,7 @@ export default function Branding() {
     fd.append('logo', file);
     try {
       await api.post('/admin/settings/logo', fd);
+      setLogoPreviewUrl(URL.createObjectURL(file));
       alert('Logo subido correctamente');
     } catch { alert('Error al subir logo'); }
   };
@@ -75,6 +83,30 @@ export default function Branding() {
           <input type="file" accept=".png,.jpg,.jpeg,.svg" onChange={handleLogoUpload}
             className="w-full text-sm mt-1" />
           <p className="text-xs text-gray-400 mt-1">PNG, JPG o SVG. Se usa en correos y reportes PDF.</p>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium text-gray-600">Tamaño del logo en el diploma</label>
+          <div className="flex items-center gap-4 mt-1">
+            <input type="range" min="20" max="220" step="5" value={settings.diploma_logo_size || 90}
+              onChange={e => setSettings({ ...settings, diploma_logo_size: e.target.value })}
+              className="flex-1" />
+            <input type="number" min="20" max="220" value={settings.diploma_logo_size || 90}
+              onChange={e => setSettings({ ...settings, diploma_logo_size: e.target.value })}
+              className="w-20 border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-center" />
+            <span className="text-xs text-gray-400">pt</span>
+          </div>
+          <div className="mt-3 p-4 bg-gray-50 border border-gray-100 rounded-lg flex items-center gap-3">
+            {logoPreviewUrl ? (
+              <img src={logoPreviewUrl} alt="Logo actual"
+                style={{ width: `${settings.diploma_logo_size || 90}px`, height: `${settings.diploma_logo_size || 90}px`, objectFit: 'contain' }} />
+            ) : (
+              <div className="w-16 h-16 flex items-center justify-center text-xs text-gray-400 border border-dashed border-gray-300 rounded">
+                Sin logo
+              </div>
+            )}
+            <p className="text-xs text-gray-400">Vista previa a tamaño real (asumiendo un diploma tamaño A4 apaisado, ~842pt de ancho).</p>
+          </div>
         </div>
 
         <div>
@@ -118,18 +150,18 @@ export default function Branding() {
             <div>
               <label className="text-xs text-gray-500">Nombre del firmante</label>
               <input value={settings.diploma_signer_name || ''} onChange={e => setSettings({ ...settings, diploma_signer_name: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Nombre del Director de TI" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Eddy Aguilar" />
             </div>
             <div>
               <label className="text-xs text-gray-500">Cargo del firmante</label>
               <input value={settings.diploma_signer_title || ''} onChange={e => setSettings({ ...settings, diploma_signer_title: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Director de Tecnología de la Información" />
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mt-1" placeholder="Director TI Corporativo" />
             </div>
           </div>
           <div>
             <label className="text-xs text-gray-500">Firma escaneada (opcional)</label>
             <input type="file" accept=".png,.jpg,.jpeg" onChange={handleSignatureUpload} className="w-full text-sm mt-1" />
-            <p className="text-xs text-gray-400 mt-1">PNG o JPG con fondo transparente o blanco. Si no sube ninguna, el diploma muestra el nombre en cursiva.</p>
+            <p className="text-xs text-gray-400 mt-1">PNG o JPG con fondo transparente o blanco. Si no sube ninguna, ese espacio queda en blanco sobre la línea de firma.</p>
           </div>
         </div>
 

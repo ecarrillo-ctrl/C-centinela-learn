@@ -364,13 +364,14 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     const completedAt = enrollments[0].completed_at;
 
     const { rows: settingRows } = await query(
-      "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('diploma_signer_name', 'diploma_signer_title', 'org_name')"
+      "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('diploma_signer_name', 'diploma_signer_title', 'org_name', 'diploma_logo_size')"
     );
     const settingsMap = {};
     for (const s of settingRows) settingsMap[s.setting_key] = s.setting_value;
     const signerName = settingsMap.diploma_signer_name || 'Eddy Aguilar';
     const signerTitle = settingsMap.diploma_signer_title || 'Director TI Corporativo';
     const orgName = settingsMap.org_name || 'AgroAmérica';
+    const logoSize = Math.min(220, Math.max(20, parseInt(settingsMap.diploma_logo_size, 10) || 90));
 
     // Firma escaneada (opcional) — si no hay ninguna subida, el espacio queda en blanco
     // (no se dibuja un nombre de relleno en cursiva).
@@ -420,10 +421,10 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     doc.rect(20, 20, pageW - 40, pageH - 40).lineWidth(3).stroke(navy);
     doc.rect(30, 30, pageW - 60, pageH - 60).lineWidth(1).stroke(green);
 
-    // Logo — esquina superior izquierda
+    // Logo — esquina superior izquierda. Tamaño configurable desde Ajustes > Marca.
     if (logoBuffer) {
       try {
-        doc.image(logoBuffer, 55, 45, { fit: [55, 55] });
+        doc.image(logoBuffer, 50, 40, { fit: [logoSize, logoSize] });
       } catch { /* imagen inválida — se omite el logo */ }
     }
 
