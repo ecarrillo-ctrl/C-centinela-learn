@@ -214,6 +214,54 @@ async function sendEmail(to, subject, html) {
 }
 
 /**
+ * Envía un correo de prueba de una campaña (en cualquier estado, no solo
+ * 'draft') a un usuario específico — normalmente el admin que la está
+ * armando. Usa exactamente el mismo armado de HTML y el mismo token de
+ * tracking real que un envío normal, para poder validar de punta a punta
+ * (incluida la pantalla de precaución al dar clic).
+ */
+export async function sendTestEmail(campaignId, testUserId) {
+  const { rows: campaigns } = await query(
+    `SELECT pc.*, pt.subject, pt.html_body,
+            cp.lookalike_url AS corporate_page_lookalike_url
+     FROM phishing_campaigns pc
+     JOIN phishing_templates pt ON pc.template_id = pt.id
+     LEFT JOIN phishing_corporate_pages cp ON pc.corporate_page_id = cp.id
+     WHERE pc.id = $1`,
+    [campaignId]
+  );
+  if (campaigns.length === 0) throw new Error('Campaña no encontrada');
+  const campaign = campaigns[0];
+
+  const { rows: users } = await query(
+    'SELECT id, email, display_name, first_name FROM users WHERE id = :1',
+    [testUserId]
+  );
+  if (users.length === 0) throw new Error('Usuario no encontrado');
+  const recipient = users[0];
+
+  const token = generateTrackingToken(recipient.id, campaignId);
+  const trackUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/api/phish/track?t=${token}`;
+  const openUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/api/phish/open?t=${token}`;
+
+  const html = campaign.html_body.replace(
+    '</body>',
+    `<img src="${openUrl}" width="1" height="1" alt="" style="display:none" /></body>`
+  );
+
+  const personalizedHtml = html
+    .replace(/{{firstName}}/g, recipient.first_name || '')
+    .replace(/{{displayName}}/g, recipient.display_name || '')
+    .replace(/{{email}}/g, recipient.email)
+    .replace(/{{trackingUrl}}/g, trackUrl)
+    .replace(/{{lookalikeUrl}}/g, campaign.corporate_page_lookalike_url || '');
+
+  await sendEmail(recipient.email, `[PRUEBA] ${campaign.subject}`, personalizedHtml);
+
+  return { sent_to: recipient.email };
+}
+
+/**
  * Resolve recipients from explicit targets:
  * { user_ids: [...], ou_ids: [...], group_ids: [...] }
  * Deduplicates by user ID.

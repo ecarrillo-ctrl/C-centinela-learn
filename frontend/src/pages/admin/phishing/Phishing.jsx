@@ -24,6 +24,8 @@ export default function AdminPhishing() {
   const [showTargetSelector, setShowTargetSelector] = useState(false);
   const [stats, setStats] = useState(null);
   const [targetReport, setTargetReport] = useState(null);
+  const [previewHtml, setPreviewHtml] = useState(null);
+  const [sendingTest, setSendingTest] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -46,6 +48,30 @@ export default function AdminPhishing() {
       setOUs(o.data.data || []);
     } catch { }
     setLoading(false);
+  }
+
+  function renderPreview(templateId, corporatePageId) {
+    const template = templates.find(t => t.id === templateId);
+    if (!template) { alert('Seleccione una plantilla primero'); return; }
+    const corpPage = corporatePages.find(p => p.id === corporatePageId);
+
+    const html = (template.html_body || '')
+      .replace(/{{firstName}}/g, 'Juan')
+      .replace(/{{displayName}}/g, 'Juan Pérez')
+      .replace(/{{email}}/g, 'juan.perez@agroamerica.com')
+      .replace(/{{trackingUrl}}/g, '#vista-previa')
+      .replace(/{{lookalikeUrl}}/g, corpPage?.lookalike_url || '');
+
+    setPreviewHtml(html);
+  }
+
+  async function sendTest(campaignId) {
+    setSendingTest(campaignId);
+    try {
+      const { data } = await api.post(`/admin/phishing/campaigns/${campaignId}/send-test`);
+      alert(`Correo de prueba enviado a ${data.sent_to}. Ábralo y dé clic al enlace para validar la pantalla que verán los destinatarios reales.`);
+    } catch (err) { alert(err.response?.data?.error || 'Error al enviar la prueba'); }
+    setSendingTest(null);
   }
 
   async function createDomain(e) {
@@ -279,6 +305,14 @@ export default function AdminPhishing() {
                 <div className="flex items-center gap-2">
                   {c.status === 'draft' && (
                     <>
+                      <button onClick={() => renderPreview(c.template_id, c.corporate_page_id)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50">
+                        Vista previa
+                      </button>
+                      <button onClick={() => sendTest(c.id)} disabled={sendingTest === c.id}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium border border-blue-200 text-blue-600 hover:bg-blue-50 disabled:opacity-50">
+                        {sendingTest === c.id ? 'Enviando...' : 'Enviar prueba'}
+                      </button>
                       <button onClick={() => sendCampaign(c.id)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-white" style={{ backgroundColor: '#00BC70' }}>
                         Enviar
                       </button>
@@ -489,6 +523,10 @@ export default function AdminPhishing() {
                 Si selecciona una página, use {'{{lookalikeUrl}}'} en el texto del enlace de la plantilla. Al dar clic, se mostrará
                 la pantalla de precaución en vez de la landing educativa, y no se le mostrará al usuario quién más reportó, dio clic o ignoró.
               </p>
+              <button type="button" onClick={() => renderPreview(campaignForm.template_id, campaignForm.corporate_page_id)}
+                className="mt-2 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50">
+                👁 Vista previa del correo
+              </button>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Destinatarios</label>
@@ -567,6 +605,23 @@ export default function AdminPhishing() {
             <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>Registrar dominio</button>
           </form>
         </Modal>
+      )}
+
+      {/* MODAL: Vista previa del correo */}
+      {previewHtml !== null && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setPreviewHtml(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-title text-lg font-bold" style={{ color: '#001B71' }}>Vista previa del correo</h3>
+              <button onClick={() => setPreviewHtml(null)} className="text-gray-400 hover:text-gray-600 text-xl">{'✕'}</button>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">
+              Datos de muestra (Juan Pérez) — nada se envía. El enlace de esta vista previa no funciona ni se rastrea.
+            </p>
+            <iframe title="Vista previa del correo" srcDoc={previewHtml} sandbox=""
+              className="w-full h-96 border border-gray-200 rounded-lg bg-white" />
+          </div>
+        </div>
       )}
     </div>
   );

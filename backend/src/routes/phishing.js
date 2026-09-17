@@ -6,7 +6,7 @@ import { query } from '../db.js';
 import { applyRiskEvent, markPhishProne } from '../services/risk-engine.js';
 import {
   generateTrackingToken, decodeTrackingToken,
-  getSmartGroupRecipients, sendPhishingCampaign, trackEvent,
+  getSmartGroupRecipients, sendPhishingCampaign, sendTestEmail, trackEvent,
 } from '../services/phishing-service.js';
 
 const router = Router();
@@ -335,6 +335,18 @@ router.post('/admin/phishing/campaigns/:id/send', authenticateToken, requireAdmi
       [req.user.id, req.params.id, JSON.stringify({ authorized_by: req.user.id, ...result })]
     );
 
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Enviar una prueba de la campaña al propio admin que la solicita, con
+// tracking real (para poder dar clic y validar la pantalla de precaución
+// o la landing educativa antes de enviarla a los destinatarios reales).
+router.post('/admin/phishing/campaigns/:id/send-test', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const result = await sendTestEmail(req.params.id, req.user.id);
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
