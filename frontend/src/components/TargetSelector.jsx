@@ -14,6 +14,9 @@ export default function TargetSelector({ value, onChange, onClose }) {
   const [userSearch, setUserSearch] = useState('');
   const [userResults, setUserResults] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [manualEmail, setManualEmail] = useState('');
+  const [addingManual, setAddingManual] = useState(false);
+  const [manualError, setManualError] = useState('');
 
   const [selectedUsers, setSelectedUsers] = useState(value?.user_ids || []);
   const [selectedUserNames, setSelectedUserNames] = useState([]);
@@ -46,9 +49,31 @@ export default function TargetSelector({ value, onChange, onClose }) {
       setSelectedUsers(prev => prev.filter(x => x !== id));
       setSelectedUserNames(prev => prev.filter(x => x.id !== id));
     } else {
-      setSelectedUsers(prev => [...prev, id]);
-      setSelectedUserNames(prev => [...prev, { id, name: user.display_name, email: user.email }]);
+      addUser(user);
     }
+  }
+
+  function addUser(user) {
+    const id = user.id;
+    if (selectedUsers.includes(id)) return;
+    setSelectedUsers(prev => [...prev, id]);
+    setSelectedUserNames(prev => [...prev, { id, name: user.display_name, email: user.email }]);
+  }
+
+  async function addManualEmail(e) {
+    e.preventDefault();
+    const email = manualEmail.trim();
+    if (!email) return;
+    setManualError('');
+    setAddingManual(true);
+    try {
+      const { data } = await api.post('/admin/users/quick-add', { email });
+      addUser(data.data);
+      setManualEmail('');
+    } catch (err) {
+      setManualError(err.response?.data?.error || 'No se pudo agregar el correo');
+    }
+    setAddingManual(false);
   }
 
   function toggleOU(ouId) {
@@ -180,6 +205,19 @@ export default function TargetSelector({ value, onChange, onClose }) {
           <input value={userSearch} onChange={e => searchUsers(e.target.value)}
             placeholder="Buscar usuario por nombre o email..."
             className="w-full border rounded-lg px-3 py-1.5 text-sm mb-2" />
+
+          <div className="mb-2">
+            <p className="text-xs text-gray-400 mb-1">¿No aparece en la búsqueda? Agréguelo manualmente por correo:</p>
+            <form onSubmit={addManualEmail} className="flex gap-2">
+              <input type="email" value={manualEmail} onChange={e => { setManualEmail(e.target.value); setManualError(''); }}
+                placeholder="correo@agroamerica.com" className="flex-1 border rounded-lg px-3 py-1.5 text-sm" />
+              <button type="submit" disabled={addingManual || !manualEmail.trim()}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50" style={{ backgroundColor: '#001B71' }}>
+                + Agregar
+              </button>
+            </form>
+            {manualError && <p className="text-xs text-red-500 mt-1">{manualError}</p>}
+          </div>
 
           {selectedUserNames.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-2">

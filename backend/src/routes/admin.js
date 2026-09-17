@@ -84,6 +84,46 @@ router.get('/users', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============ QUICK ADD — usuario manual por correo (destinatario no sincronizado desde AD) ============
+router.post('/users/quick-add', async (req, res) => {
+  try {
+    const email = (req.body?.email || '').trim();
+    const displayName = (req.body?.display_name || '').trim();
+
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Correo inválido' });
+    }
+
+    const { rows: existing } = await query(
+      'SELECT id, email, display_name, first_name FROM users WHERE UPPER(email) = UPPER(:1)',
+      [email]
+    );
+    if (existing.length > 0) {
+      return res.json({ data: existing[0] });
+    }
+
+    const name = displayName || email.split('@')[0];
+
+    await query(
+      `INSERT INTO users (email, display_name, first_name, status)
+       VALUES (:1, :2, :3, 'active')`,
+      [email, name, name]
+    );
+
+    const { rows } = await query(
+      'SELECT id, email, display_name, first_name FROM users WHERE UPPER(email) = UPPER(:1)',
+      [email]
+    );
+
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES ($1, 'user_quick_add', 'user', $2, $3)",
+      [req.user.id, rows[0].id, JSON.stringify({ email })]
+    );
+
+    res.json({ data: rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ============ PROMOTE / DEMOTE ADMIN ============
 router.patch('/users/:id/promote', async (req, res) => {
   try {
