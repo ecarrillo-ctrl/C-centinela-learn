@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+*.pem
+elearning-deploy.tar.gz
+storage/videos/*
+storage/pdfs/*
+storage/scorm/*
+storage/presentations/*
+storage/backups/*
+!.gitkeep
+*.log

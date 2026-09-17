@@ -1,0 +1,74 @@
+# ==============================================================================
+# eLearning AgroAmérica — Docker Compose PRODUCCIÓN
+# Servidor: 172.17.4.160
+# Puerto expuesto: 3005 (backend + frontend via nginx)
+# ==============================================================================
+# Uso: docker compose -f docker-compose.prod.yml up -d --build
+# ==============================================================================
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: elearning-backend
+    restart: unless-stopped
+    env_file: .env
+    # autoheal reinicia este contenedor cuando el healthcheck lo marca "unhealthy".
+    # (restart: unless-stopped NO reacciona a healthchecks por sí solo.)
+    labels:
+      - autoheal=true
+    networks:
+      - elearning-net
+    expose:
+      - "3005"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3005/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: elearning-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - elearning-net
+    ports:
+      - "3005:80"
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # Vigila contenedores con label autoheal=true y los reinicia si quedan "unhealthy".
+  # Requiere acceso al socket de Docker (solo lectura del estado + restart).
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: elearning-autoheal
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30        # revisa cada 30s
+      - AUTOHEAL_START_PERIOD=30    # espera 30s tras arrancar antes de vigilar
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+
+networks:
+  elearning-net:
+    driver: bridge

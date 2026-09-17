@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #001B71;
+  --color-blue: #2B5597;
+  --color-beige: #D1CCBD;
+  --color-green: #00BC70;
+
+  --font-title: 'Libre Baskerville', Georgia, serif;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.font-title { font-family: var(--font-title); }
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
