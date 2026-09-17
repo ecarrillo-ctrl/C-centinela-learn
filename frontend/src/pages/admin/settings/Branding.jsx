@@ -163,7 +163,7 @@ export default function Branding() {
           <label className="text-sm font-medium text-gray-600 mb-2 block">Diplomas de capacitación</label>
           <p className="text-xs text-gray-400 mb-3">
             Nombre, cargo y firma que aparecen en el diploma que se genera cuando un usuario completa una
-            capacitación (aprobando el quiz, si tiene, en su primer intento).
+            capacitación (aprobando el quiz, si tiene, sin importar el número de intentos).
           </p>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>

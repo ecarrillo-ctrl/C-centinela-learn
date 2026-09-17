@@ -148,13 +148,6 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
     const score = total > 0 ? Math.round((correct / total) * 100) : 0;
     const passed = score >= 70; // 70% para aprobar
 
-    // Se calcula ANTES de insertar el intento actual: si no hay intentos previos, este es el primero.
-    const { rows: priorAttempts } = await query(
-      'SELECT COUNT(*) AS cnt FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2',
-      [req.user.id, req.params.courseId]
-    );
-    const isFirstAttempt = parseInt(priorAttempts[0]?.cnt || 0, 10) === 0;
-
     await query(
       'INSERT INTO user_quiz_attempts (user_id, course_id, score, passed, answers_json) VALUES (:1, :2, :3, :4, :5)',
       [req.user.id, req.params.courseId, score, passed ? 1 : 0, JSON.stringify(answers)]
@@ -175,8 +168,7 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
       passed,
       correct,
       total,
-      is_first_attempt: isFirstAttempt,
-      diploma_eligible: passed && isFirstAttempt,
+      diploma_eligible: passed,
       message: passed ? 'Aprobado. Capacitación completada.' : `Reprobado (${score}%). Necesita 70% para aprobar. Puede intentar de nuevo.`,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }

@@ -28,8 +28,9 @@ async function fetchImageIfExists(key) {
 }
 
 /**
- * Genera el PDF del diploma para un usuario/curso, validando elegibilidad
- * (capacitación completada y, si tenía quiz, aprobada en el primer intento).
+ * Genera el PDF del diploma para un usuario/curso. Elegibilidad: haber
+ * completado la capacitación (training_enrollments.status = 'completed'),
+ * sin importar cuántos intentos de quiz haya necesitado.
  * @returns {Promise<{ buffer: Buffer, courseTitle: string, userName: string }>}
  */
 export async function generateDiplomaPdf(userId, courseId, fallbackDisplayName = 'Usuario') {
@@ -41,16 +42,6 @@ export async function generateDiplomaPdf(userId, courseId, fallbackDisplayName =
   );
   if (enrollments.length === 0) {
     throw new DiplomaError('Aún no ha completado esta capacitación', 403);
-  }
-
-  const { rows: attempts } = await query(
-    'SELECT passed FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2 ORDER BY attempted_at ASC FETCH FIRST 1 ROWS ONLY',
-    [userId, courseId]
-  );
-  const hadQuiz = attempts.length > 0;
-  const passedFirstAttempt = !hadQuiz || attempts[0].passed === 1;
-  if (!passedFirstAttempt) {
-    throw new DiplomaError('El diploma solo se otorga si aprobó el quiz en su primer intento', 403);
   }
 
   const { rows: courseRows } = await query('SELECT title FROM courses WHERE id = :1', [courseId]);
