@@ -368,11 +368,12 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     );
     const settingsMap = {};
     for (const s of settingRows) settingsMap[s.setting_key] = s.setting_value;
-    const signerName = settingsMap.diploma_signer_name || 'Nombre del Director de TI';
-    const signerTitle = settingsMap.diploma_signer_title || 'Director de Tecnología de la Información';
+    const signerName = settingsMap.diploma_signer_name || 'Eddy Aguilar';
+    const signerTitle = settingsMap.diploma_signer_title || 'Director TI Corporativo';
     const orgName = settingsMap.org_name || 'AgroAmérica';
 
-    // Firma escaneada (opcional) — si el admin no ha subido ninguna, se usa el nombre en cursiva.
+    // Firma escaneada (opcional) — si no hay ninguna subida, el espacio queda en blanco
+    // (no se dibuja un nombre de relleno en cursiva).
     let signatureBuffer = null;
     try {
       const info = await getFileInfo('branding/signature.png');
@@ -382,7 +383,23 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
         for await (const chunk of body) chunks.push(chunk);
         signatureBuffer = Buffer.concat(chunks);
       }
-    } catch { /* sin firma escaneada — se usa el fallback de texto */ }
+    } catch { /* sin firma escaneada */ }
+
+    // Logo (opcional) — se sube desde Ajustes > Marca > Logotipo, mismo archivo que
+    // usan los correos y otros reportes. Se prueban las extensiones más comunes.
+    let logoBuffer = null;
+    for (const ext of ['png', 'jpg', 'jpeg']) {
+      try {
+        const info = await getFileInfo(`branding/logo.${ext}`);
+        if (info) {
+          const { body } = await getFileStream(`branding/logo.${ext}`);
+          const chunks = [];
+          for await (const chunk of body) chunks.push(chunk);
+          logoBuffer = Buffer.concat(chunks);
+          break;
+        }
+      } catch { /* no existe con esta extensión, se prueba la siguiente */ }
+    }
 
     const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0 });
     const chunks = [];
@@ -403,8 +420,15 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     doc.rect(20, 20, pageW - 40, pageH - 40).lineWidth(3).stroke(navy);
     doc.rect(30, 30, pageW - 60, pageH - 60).lineWidth(1).stroke(green);
 
+    // Logo — esquina superior izquierda
+    if (logoBuffer) {
+      try {
+        doc.image(logoBuffer, 55, 45, { fit: [55, 55] });
+      } catch { /* imagen inválida — se omite el logo */ }
+    }
+
     doc.fillColor(navy).font('Helvetica-Bold').fontSize(12)
-      .text(orgName.toUpperCase(), 0, 70, { align: 'center' });
+      .text('AgroAmerica', 0, 70, { align: 'center' });
 
     doc.fillColor(navy).font('Helvetica-Bold').fontSize(34)
       .text('Diploma de Capacitación', 0, 110, { align: 'center' });
@@ -431,22 +455,18 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     doc.fillColor('#888').font('Helvetica').fontSize(11)
       .text(`Fecha de finalización: ${dateStr}`, 0, 335, { align: 'center' });
 
-    // Firma
+    // Firma — si hay una imagen escaneada se dibuja sobre la línea; si no, el
+    // espacio queda en blanco (no se pone un nombre de relleno en cursiva).
     const sigY = pageH - 130;
     const sigCenterX = pageW / 2;
     if (signatureBuffer) {
       try {
         doc.image(signatureBuffer, sigCenterX - 60, sigY - 45, { width: 120, height: 45 });
-      } catch { /* imagen inválida — se ignora, solo queda la línea y el nombre */ }
-    } else {
-      doc.font('Helvetica-Oblique').fontSize(20).fillColor(navy)
-        .text(signerName, sigCenterX - 100, sigY - 30, { width: 200, align: 'center' });
+      } catch { /* imagen inválida — se ignora, el espacio queda en blanco */ }
     }
     doc.moveTo(sigCenterX - 100, sigY).lineTo(sigCenterX + 100, sigY).lineWidth(1).stroke('#999');
     doc.font('Helvetica-Bold').fontSize(11).fillColor(navy)
-      .text(signerName, sigCenterX - 150, sigY + 8, { width: 300, align: 'center' });
-    doc.font('Helvetica').fontSize(9).fillColor('#777')
-      .text(signerTitle, sigCenterX - 150, sigY + 22, { width: 300, align: 'center' });
+      .text(`${signerName}, ${signerTitle}`, sigCenterX - 150, sigY + 10, { width: 300, align: 'center' });
 
     doc.font('Helvetica').fontSize(8).fillColor('#aaa')
       .text(`Generado por eLearning ${orgName} — Plataforma de Concientización en Ciberseguridad`, 0, pageH - 45, { align: 'center' });
