@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { upload } from '../middleware/upload.js';
-import { uploadFile, getPresignedUrl } from '../services/storage-service.js';
+import { uploadFile, getPresignedUrl, deleteFile } from '../services/storage-service.js';
 import path from 'node:path';
 
 const router = Router();
@@ -134,6 +134,20 @@ router.get('/settings/signature', async (_req, res) => {
   } catch (err) {
     res.status(404).json({ error: 'Firma no configurada' });
   }
+});
+
+router.delete('/settings/signature', async (req, res) => {
+  try {
+    await deleteFile('branding/signature.png');
+
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type)
+       VALUES (:1, 'signature_delete', 'settings')`,
+      [req.user.id]
+    );
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ============ ORGANIZATIONS ============

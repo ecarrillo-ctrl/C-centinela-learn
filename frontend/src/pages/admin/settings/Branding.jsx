@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../../../lib/api';
 
 export default function Branding() {
@@ -6,6 +6,9 @@ export default function Branding() {
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState(null);
+  const [hasSignature, setHasSignature] = useState(false);
+  const [removingSignature, setRemovingSignature] = useState(false);
+  const signatureInputRef = useRef(null);
 
   useEffect(() => {
     Promise.all([
@@ -29,6 +32,10 @@ export default function Branding() {
     api.get('/admin/settings/logo', { responseType: 'blob' })
       .then(r => setLogoPreviewUrl(URL.createObjectURL(r.data)))
       .catch(() => setLogoPreviewUrl(null));
+
+    api.get('/admin/settings/signature', { responseType: 'blob' })
+      .then(() => setHasSignature(true))
+      .catch(() => setHasSignature(false));
   }, []);
 
   const save = async () => {
@@ -59,8 +66,20 @@ export default function Branding() {
     fd.append('signature', file);
     try {
       await api.post('/admin/settings/signature', fd);
+      setHasSignature(true);
       alert('Firma subida correctamente');
     } catch { alert('Error al subir la firma'); }
+  };
+
+  const handleRemoveSignature = async () => {
+    if (!confirm('¿Quitar la firma escaneada? El diploma quedará con el espacio en blanco sobre la línea de firma.')) return;
+    setRemovingSignature(true);
+    try {
+      await api.delete('/admin/settings/signature');
+      setHasSignature(false);
+      if (signatureInputRef.current) signatureInputRef.current.value = '';
+    } catch { alert('Error al quitar la firma'); }
+    setRemovingSignature(false);
   };
 
   if (!loaded) return <div className="text-gray-400 py-8 text-center">Cargando...</div>;
@@ -160,7 +179,15 @@ export default function Branding() {
           </div>
           <div>
             <label className="text-xs text-gray-500">Firma escaneada (opcional)</label>
-            <input type="file" accept=".png,.jpg,.jpeg" onChange={handleSignatureUpload} className="w-full text-sm mt-1" />
+            <div className="flex items-center gap-2 mt-1">
+              <input ref={signatureInputRef} type="file" accept=".png,.jpg,.jpeg" onChange={handleSignatureUpload} className="flex-1 text-sm" />
+              {hasSignature && (
+                <button type="button" onClick={handleRemoveSignature} disabled={removingSignature}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap">
+                  {removingSignature ? 'Quitando...' : 'Quitar firma'}
+                </button>
+              )}
+            </div>
             <p className="text-xs text-gray-400 mt-1">PNG o JPG con fondo transparente o blanco. Si no sube ninguna, ese espacio queda en blanco sobre la línea de firma.</p>
           </div>
         </div>
