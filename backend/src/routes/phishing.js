@@ -719,61 +719,88 @@ router.get('/phish/landing/:campaignId', async (req, res) => {
   }
 });
 
-// ============ PHISH ALERT BUTTON (PAB) ============
+// ============ PHISH ALERT BUTTON (PAB) — lógica compartida ============
+// La usan tanto el botón PAB dentro de la app (usuario autenticado) como el
+// Add-on de Gmail/Outlook (usuario identificado por su correo, ver más abajo).
+async function recordPabReport(userId, reportedSubject, reportedFrom, ip, userAgent) {
+  await query(
+    `INSERT INTO pab_reports (user_id, reported_subject, reported_from, was_simulated)
+     VALUES ($1, $2, $3, 0)`,
+    [userId, reportedSubject, reportedFrom || null]
+  );
+
+  const { rows } = await query(
+    `SELECT id FROM pab_reports WHERE user_id = $1 ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY`,
+    [userId]
+  );
+
+  const { rows: simulated } = await query(
+    `SELECT pc.id, pc.name FROM phishing_campaigns pc
+     JOIN phishing_templates pt ON pc.template_id = pt.id
+     WHERE pt.subject = $1 AND pc.status = 'completed'
+     ORDER BY pc.sent_at DESC FETCH FIRST 1 ROWS ONLY`,
+    [reportedSubject]
+  );
+
+  if (simulated.length > 0) {
+    await query(
+      "UPDATE pab_reports SET was_simulated = 1, campaign_id = $1 WHERE id = $2",
+      [simulated[0].id, rows[0].id]
+    );
+
+    const { rows: alreadyClicked } = await query(
+      "SELECT 1 FROM phishing_results WHERE user_id = $1 AND campaign_id = $2 AND event = 'clicked'",
+      [userId, simulated[0].id]
+    );
+
+    if (alreadyClicked.length === 0) {
+      await trackEvent(userId, simulated[0].id, 'reported', ip, userAgent);
+      await applyRiskEvent(userId, -10, 'Reporte de phishing con PAB (simulado)', 'pab', rows[0].id);
+    }
+
+    return { success: true, message: '¡Excelente! Usted reportó un correo de phishing simulado.', was_simulated: true, detected: true };
+  }
+
+  await applyRiskEvent(userId, -5, 'Reporte de correo sospechoso real con PAB', 'pab', rows[0].id);
+
+  return { success: true, message: 'Gracias por reportar este correo. El equipo de seguridad lo revisará.', was_simulated: false };
+}
+
 router.post('/pab/report', authenticateToken, validate(pabReportSchema), async (req, res) => {
   try {
     const { reported_subject, reported_from } = req.body;
+    const result = await recordPabReport(req.user.id, reported_subject, reported_from, req.ip, req.headers['user-agent'] || null);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    await query(
-      `INSERT INTO pab_reports (user_id, reported_subject, reported_from, was_simulated)
-       VALUES ($1, $2, $3, 0)`,
-      [req.user.id, reported_subject, reported_from || null]
-    );
-
-    const { rows } = await query(
-      `SELECT id FROM pab_reports WHERE user_id = $1 ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY`,
-      [req.user.id]
-    );
-
-    const { rows: simulated } = await query(
-      `SELECT pc.id, pc.name FROM phishing_campaigns pc
-       JOIN phishing_templates pt ON pc.template_id = pt.id
-       WHERE pt.subject = $1 AND pc.status = 'completed'
-       ORDER BY pc.sent_at DESC FETCH FIRST 1 ROWS ONLY`,
-      [reported_subject]
-    );
-
-    if (simulated.length > 0) {
-      await query(
-        "UPDATE pab_reports SET was_simulated = 1, campaign_id = $1 WHERE id = $2",
-        [simulated[0].id, rows[0].id]
-      );
-
-      const { rows: alreadyClicked } = await query(
-        "SELECT 1 FROM phishing_results WHERE user_id = $1 AND campaign_id = $2 AND event = 'clicked'",
-        [req.user.id, simulated[0].id]
-      );
-
-      if (alreadyClicked.length === 0) {
-        await trackEvent(req.user.id, simulated[0].id, 'reported', req.ip, req.headers['user-agent'] || null);
-        await applyRiskEvent(req.user.id, -10, 'Reporte de phishing con PAB (simulado)', 'pab', rows[0].id);
-      }
-
-      return res.json({
-        success: true,
-        message: '¡Excelente! Usted reportó un correo de phishing simulado.',
-        was_simulated: true,
-        detected: true,
-      });
+// ============ PAB desde Add-on de Gmail/Outlook ============
+// No pasa por authenticateToken (el add-on corre fuera de la sesión web de la
+// app): se protege con una API key propia (PAB_ADDON_API_KEY) y, en Cloudflare,
+// con una política de Access exclusiva para esta ruta (service token o bypass).
+// El usuario se identifica por su correo de Gmail/Outlook, emparejado contra
+// la tabla de usuarios ya sincronizada desde AD.
+router.post('/pab/addon-report', async (req, res) => {
+  try {
+    const apiKey = req.headers['x-pab-addon-key'];
+    if (!process.env.PAB_ADDON_API_KEY || apiKey !== process.env.PAB_ADDON_API_KEY) {
+      return res.status(403).json({ error: 'No autorizado' });
     }
 
-    await applyRiskEvent(req.user.id, -5, 'Reporte de correo sospechoso real con PAB', 'pab', rows[0].id);
+    const { reporter_email, reported_subject, reported_from } = req.body || {};
+    if (!reporter_email || !reported_subject) {
+      return res.status(400).json({ error: 'reporter_email y reported_subject son requeridos' });
+    }
 
-    res.json({
-      success: true,
-      message: 'Gracias por reportar este correo. El equipo de seguridad lo revisará.',
-      was_simulated: false,
-    });
+    const { rows } = await query('SELECT id FROM users WHERE UPPER(email) = UPPER(:1)', [reporter_email]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'No se encontró un usuario con ese correo' });
+    }
+
+    const result = await recordPabReport(rows[0].id, reported_subject, reported_from, req.ip, 'gmail-addon');
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
