@@ -12,7 +12,7 @@ export default function Messages() {
 
   useEffect(() => {
     loadHistory();
-    api.get('/admin/groups/all').then(r => setGroups(r.data.data || [])).catch(() => { });
+    api.get('/admin/groups/all?status=active').then(r => setGroups(r.data.data || [])).catch(() => { });
   }, []);
 
   function loadHistory() {

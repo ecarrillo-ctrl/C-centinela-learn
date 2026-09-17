@@ -16,7 +16,7 @@ export default function UsersList() {
   const perPage = 50;
 
   useEffect(() => {
-    api.get('/admin/groups/all').then(r => setAllGroups(r.data.data || [])).catch(() => { });
+    api.get('/admin/groups/all?status=active').then(r => setAllGroups(r.data.data || [])).catch(() => { });
     api.get('/admin/org-units').then(r => setOUs(r.data.data || [])).catch(() => { });
   }, []);
 
