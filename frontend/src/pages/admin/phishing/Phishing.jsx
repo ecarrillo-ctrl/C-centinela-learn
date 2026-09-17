@@ -6,28 +6,34 @@ export default function AdminPhishing() {
   const [tab, setTab] = useState('campaigns');
   const [campaigns, setCampaigns] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [corporatePages, setCorporatePages] = useState([]);
   const [ous, setOUs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
+  const [showNewCorporatePage, setShowNewCorporatePage] = useState(false);
   const [editCampaign, setEditCampaign] = useState(null);
   const [templateForm, setTemplateForm] = useState({ name: '', subject: '', html_body: '', difficulty: 'medium', category: '', red_flags: [] });
-  const [campaignForm, setCampaignForm] = useState({ name: '', template_id: '', org_unit_scope: '', targets: { user_ids: [], ou_ids: [], group_ids: [] } });
+  const [campaignForm, setCampaignForm] = useState({ name: '', template_id: '', org_unit_scope: '', corporate_page_id: '', targets: { user_ids: [], ou_ids: [], group_ids: [] } });
+  const [corporatePageForm, setCorporatePageForm] = useState({ name: '', real_url: '', lookalike_url: '' });
   const [showTargetSelector, setShowTargetSelector] = useState(false);
   const [stats, setStats] = useState(null);
+  const [targetReport, setTargetReport] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
     try {
-      const [c, t, o] = await Promise.all([
+      const [c, t, cp, o] = await Promise.all([
         api.get('/admin/phishing/campaigns'),
         api.get('/admin/phishing/templates'),
+        api.get('/admin/phishing/corporate-pages').catch(() => ({ data: { data: [] } })),
         api.get('/admin/org-units').catch(() => ({ data: { data: [] } })),
       ]);
       setCampaigns(c.data.data || []);
       setTemplates(t.data.data || []);
+      setCorporatePages(cp.data.data || []);
       setOUs(o.data.data || []);
     } catch { }
     setLoading(false);
@@ -50,13 +56,32 @@ export default function AdminPhishing() {
         name: campaignForm.name,
         template_id: campaignForm.template_id,
         org_unit_scope: campaignForm.org_unit_scope || null,
+        corporate_page_id: campaignForm.corporate_page_id || null,
         targets: campaignForm.targets,
       });
       setShowNewCampaign(false);
       setShowTargetSelector(false);
-      setCampaignForm({ name: '', template_id: '', org_unit_scope: '', targets: { user_ids: [], ou_ids: [], group_ids: [] } });
+      setCampaignForm({ name: '', template_id: '', org_unit_scope: '', corporate_page_id: '', targets: { user_ids: [], ou_ids: [], group_ids: [] } });
       loadData();
     } catch (err) { alert(err.response?.data?.error || 'Error'); }
+  }
+
+  async function createCorporatePage(e) {
+    e.preventDefault();
+    try {
+      await api.post('/admin/phishing/corporate-pages', corporatePageForm);
+      setShowNewCorporatePage(false);
+      setCorporatePageForm({ name: '', real_url: '', lookalike_url: '' });
+      loadData();
+    } catch (err) { alert(err.response?.data?.error || 'Error'); }
+  }
+
+  async function deleteCorporatePage(id) {
+    if (!confirm('¿Desactivar esta página corporativa?')) return;
+    try {
+      await api.delete(`/admin/phishing/corporate-pages/${id}`);
+      loadData();
+    } catch (err) { alert(err.response?.data?.error || 'Error al eliminar'); }
   }
 
   async function updateCampaign(e) {
@@ -92,10 +117,17 @@ export default function AdminPhishing() {
 
   async function viewStats(id) {
     try {
-      const { data } = await api.get(`/admin/phishing/campaigns/${id}/stats`);
+      const [{ data }, { data: targetsData }] = await Promise.all([
+        api.get(`/admin/phishing/campaigns/${id}/stats`),
+        api.get(`/admin/phishing/campaigns/${id}/targets`).catch(() => ({ data: null })),
+      ]);
       setStats(data);
+      setTargetReport(targetsData);
     } catch { }
   }
+
+  const STATUS_LABEL = { reported: 'Reportó', clicked: 'Dio clic', ignored: 'Sin acción' };
+  const STATUS_COLOR = { reported: 'bg-green-100 text-green-700', clicked: 'bg-red-100 text-red-700', ignored: 'bg-gray-100 text-gray-600' };
 
   async function deleteTemplate(id) {
     if (!confirm('¿Desactivar esta plantilla?')) return;
@@ -108,6 +140,7 @@ export default function AdminPhishing() {
   const tabs = [
     { id: 'campaigns', label: 'Campañas' },
     { id: 'templates', label: 'Plantillas' },
+    { id: 'corporate-pages', label: 'Páginas corporativas' },
     { id: 'results', label: 'Resultados' },
   ];
 
@@ -126,6 +159,11 @@ export default function AdminPhishing() {
           {tab === 'templates' && (
             <button onClick={() => setShowNewTemplate(true)} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
               + Nueva plantilla
+            </button>
+          )}
+          {tab === 'corporate-pages' && (
+            <button onClick={() => setShowNewCorporatePage(true)} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
+              + Nueva página
             </button>
           )}
         </div>
@@ -153,6 +191,11 @@ export default function AdminPhishing() {
                     Plantilla: {c.template_name} · Estado: <span className={`font-medium ${c.status === 'completed' ? 'text-green-600' : c.status === 'draft' ? 'text-amber-600' : 'text-blue-600'}`}>{c.status}</span>
                     {c.org_unit_name && <> · Grupo: {c.org_unit_name}</>}
                   </p>
+                  {c.corporate_page_name && (
+                    <p className="text-xs mt-1">
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-medium">Ingeniería social pasiva: {c.corporate_page_name}</span>
+                    </p>
+                  )}
                   {c.sent_at && <p className="text-xs text-gray-400">Enviada: {new Date(c.sent_at).toLocaleDateString('es-GT')}</p>}
                   {c.event_count > 0 && <p className="text-xs text-gray-500 mt-1">{c.event_count} eventos · {c.click_count} clicks</p>}
                 </div>
@@ -183,7 +226,7 @@ export default function AdminPhishing() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-title font-bold" style={{ color: '#001B71' }}>Resultados</h3>
-                <button onClick={() => setStats(null)} className="text-gray-400 hover:text-gray-600">{'\u2715'}</button>
+                <button onClick={() => { setStats(null); setTargetReport(null); }} className="text-gray-400 hover:text-gray-600">{'\u2715'}</button>
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <StatCard label="Destinatarios" value={stats.total_recipients} />
@@ -191,6 +234,30 @@ export default function AdminPhishing() {
                 <StatCard label="Clicks" value={stats.events?.clicked || 0} color="#e74c3c" />
                 <StatCard label="Reportados" value={stats.events?.reported || 0} color="#00BC70" />
               </div>
+
+              {targetReport && targetReport.targets?.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-sm font-semibold text-gray-600 mb-3">Detalle por destinatario</h4>
+                  <div className="max-h-80 overflow-auto border border-gray-100 rounded-lg">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-gray-50"><tr className="text-left text-xs text-gray-400">
+                        <th className="px-3 py-2">Usuario</th><th className="px-3 py-2">Correo</th><th className="px-3 py-2">Estado</th>
+                      </tr></thead>
+                      <tbody>
+                        {targetReport.targets.map(tg => (
+                          <tr key={tg.user_id} className="border-t border-gray-50">
+                            <td className="px-3 py-2">{tg.display_name}</td>
+                            <td className="px-3 py-2 text-gray-500">{tg.email}</td>
+                            <td className="px-3 py-2">
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLOR[tg.status]}`}>{STATUS_LABEL[tg.status]}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -214,6 +281,30 @@ export default function AdminPhishing() {
                 </span>
                 {t.category && <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">{t.category}</span>}
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* CORPORATE PAGES TAB */}
+      {tab === 'corporate-pages' && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-400">
+            Apps corporativas reales y su variante "look-alike" usada en campañas de ingeniería social pasiva.
+            Al crear una campaña con una de estas páginas, el enlace mostrado usa la URL look-alike y, al dar clic,
+            se muestra una pantalla de precaución (en vez de la landing educativa clásica).
+          </p>
+          {corporatePages.length === 0 && <p className="text-gray-400 text-center py-8">No hay páginas corporativas registradas.</p>}
+          {corporatePages.map(p => (
+            <div key={p.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-center justify-between">
+              <div>
+                <p className="font-medium" style={{ color: '#001B71' }}>{p.name}</p>
+                <p className="text-xs text-gray-400 mt-1">Real: {p.real_url}</p>
+                <p className="text-xs text-gray-400">Look-alike: {p.lookalike_url}</p>
+              </div>
+              <button onClick={() => deleteCorporatePage(p.id)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50">
+                Eliminar
+              </button>
             </div>
           ))}
         </div>
@@ -259,7 +350,7 @@ export default function AdminPhishing() {
               <label className="block text-xs font-medium text-gray-600 mb-1">Cuerpo HTML</label>
               <textarea value={templateForm.html_body} onChange={e => setTemplateForm({ ...templateForm, html_body: e.target.value })}
                 className="w-full border rounded-lg px-3 py-2 text-sm h-32 font-mono" placeholder={'<html><body>\n  <p>Estimado {{displayName}},</p>\n  <a href="{{trackingUrl}}">Clic aquí</a>\n</body></html>'} required />
-              <p className="text-xs text-gray-400 mt-1">Use {'{{trackingUrl}}'}, {'{{displayName}}'}, {'{{email}}'}, {'{{firstName}}'}</p>
+              <p className="text-xs text-gray-400 mt-1">Use {'{{trackingUrl}}'}, {'{{displayName}}'}, {'{{email}}'}, {'{{firstName}}'}, {'{{lookalikeUrl}}'} (solo si la campaña usa una página corporativa)</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -287,6 +378,18 @@ export default function AdminPhishing() {
                 <option value="">Seleccionar plantilla...</option>
                 {templates.map(t => <option key={t.id} value={t.id}>{t.name} ({t.difficulty})</option>)}
               </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Ingeniería social pasiva (opcional)</label>
+              <select value={campaignForm.corporate_page_id} onChange={e => setCampaignForm({ ...campaignForm, corporate_page_id: e.target.value })}
+                className="w-full border rounded-lg px-3 py-2 text-sm">
+                <option value="">Ninguna (campaña clásica de phishing)</option>
+                {corporatePages.map(p => <option key={p.id} value={p.id}>{p.name} ({p.lookalike_url})</option>)}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                Si selecciona una página, use {'{{lookalikeUrl}}'} en el texto del enlace de la plantilla. Al dar clic, se mostrará
+                la pantalla de precaución en vez de la landing educativa, y no se le mostrará al usuario quién más reportó, dio clic o ignoró.
+              </p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Destinatarios</label>
@@ -336,6 +439,18 @@ export default function AdminPhishing() {
               </select>
             </div>
             <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>Guardar cambios</button>
+          </form>
+        </Modal>
+      )}
+
+      {/* MODAL: Nueva Página Corporativa */}
+      {showNewCorporatePage && (
+        <Modal title="Nueva página corporativa" onClose={() => setShowNewCorporatePage(false)}>
+          <form onSubmit={createCorporatePage} className="space-y-4">
+            <Input label="Nombre" value={corporatePageForm.name} onChange={v => setCorporatePageForm({ ...corporatePageForm, name: v })} placeholder="ej: Correo corporativo" required />
+            <Input label="URL real" value={corporatePageForm.real_url} onChange={v => setCorporatePageForm({ ...corporatePageForm, real_url: v })} placeholder="https://mail.agroamerica.com" required />
+            <Input label="URL look-alike (usada en el correo de prueba)" value={corporatePageForm.lookalike_url} onChange={v => setCorporatePageForm({ ...corporatePageForm, lookalike_url: v })} placeholder="https://mail-agroamerica.com" required />
+            <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>Crear página</button>
           </form>
         </Modal>
       )}

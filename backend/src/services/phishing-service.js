@@ -120,9 +120,11 @@ export async function trackEvent(userId, campaignId, event, ip = null, userAgent
 
 export async function sendPhishingCampaign(campaignId) {
   const { rows: campaigns } = await query(
-    `SELECT pc.*, pt.name AS template_name, pt.subject, pt.html_body, pt.red_flags_json
+    `SELECT pc.*, pt.name AS template_name, pt.subject, pt.html_body, pt.red_flags_json,
+            cp.lookalike_url AS corporate_page_lookalike_url
      FROM phishing_campaigns pc
      JOIN phishing_templates pt ON pc.template_id = pt.id
+     LEFT JOIN phishing_corporate_pages cp ON pc.corporate_page_id = cp.id
      WHERE pc.id = $1 AND pc.status = 'draft'`,
     [campaignId]
   );
@@ -171,11 +173,13 @@ export async function sendPhishingCampaign(campaignId) {
       .replace(/{{firstName}}/g, recipient.first_name || '')
       .replace(/{{displayName}}/g, recipient.display_name || '')
       .replace(/{{email}}/g, recipient.email)
-      .replace(/{{trackingUrl}}/g, trackUrl);
+      .replace(/{{trackingUrl}}/g, trackUrl)
+      .replace(/{{lookalikeUrl}}/g, campaign.corporate_page_lookalike_url || '');
 
     try {
       await sendEmail(recipient.email, campaign.subject, personalizedHtml);
       sent++;
+      await trackEvent(recipient.id, campaignId, 'delivered');
     } catch (err) {
       errors.push({ email: recipient.email, error: err.message });
     }

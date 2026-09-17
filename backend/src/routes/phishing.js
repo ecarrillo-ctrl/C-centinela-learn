@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { createTemplateSchema, createCampaignSchema, smartGroupPreviewSchema, pabReportSchema } from '../schemas/phishing.js';
+import { createTemplateSchema, createCampaignSchema, smartGroupPreviewSchema, pabReportSchema, createCorporatePageSchema, updateCorporatePageSchema } from '../schemas/phishing.js';
 import { query } from '../db.js';
 import { applyRiskEvent, markPhishProne } from '../services/risk-engine.js';
 import {
@@ -63,15 +63,92 @@ router.delete('/admin/phishing/templates/:id', authenticateToken, requireAdmin, 
   }
 });
 
+// ============ CORPORATE PAGES (admin) — páginas corporativas para ingeniería social pasiva ============
+router.get('/admin/phishing/corporate-pages', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query(
+      'SELECT id, name, real_url, lookalike_url, created_by, created_at FROM phishing_corporate_pages WHERE is_active = 1 ORDER BY name'
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/phishing/corporate-pages', authenticateToken, requireAdmin, validate(createCorporatePageSchema), async (req, res) => {
+  try {
+    const { name, real_url, lookalike_url } = req.body;
+
+    await query(
+      `INSERT INTO phishing_corporate_pages (name, real_url, lookalike_url, created_by)
+       VALUES (:1, :2, :3, :4)`,
+      [name, real_url, lookalike_url, req.user.id]
+    );
+
+    const { rows } = await query(
+      `SELECT id, name, real_url, lookalike_url, created_at FROM phishing_corporate_pages
+       WHERE name = :1 AND created_by = :2 ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY`,
+      [name, req.user.id]
+    );
+
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES ($1, 'phishing_corporate_page_create', 'phishing_corporate_page', $2, $3)",
+      [req.user.id, rows[0].id, JSON.stringify({ name })]
+    );
+
+    res.json({ data: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/admin/phishing/corporate-pages/:id', authenticateToken, requireAdmin, validate(updateCorporatePageSchema), async (req, res) => {
+  try {
+    const { name, real_url, lookalike_url } = req.body;
+    const sets = [];
+    const params = [];
+    let idx = 1;
+
+    if (name) { sets.push(`name = :${idx++}`); params.push(name); }
+    if (real_url) { sets.push(`real_url = :${idx++}`); params.push(real_url); }
+    if (lookalike_url) { sets.push(`lookalike_url = :${idx++}`); params.push(lookalike_url); }
+
+    if (sets.length === 0) return res.status(400).json({ error: 'Nada que actualizar' });
+
+    const { rowsAffected } = await query(
+      `UPDATE phishing_corporate_pages SET ${sets.join(', ')} WHERE id = :${idx}`,
+      [...params, req.params.id]
+    );
+
+    if (rowsAffected === 0) return res.status(404).json({ error: 'Página no encontrada' });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/admin/phishing/corporate-pages/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rowsAffected } = await query(
+      'UPDATE phishing_corporate_pages SET is_active = 0 WHERE id = $1',
+      [req.params.id]
+    );
+    if (rowsAffected === 0) return res.status(404).json({ error: 'Página no encontrada' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ CAMPAIGNS (admin) ============
 router.get('/admin/phishing/campaigns', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT pc.*, pt.name AS template_name, pt.subject AS template_subject,
+        cp.name AS corporate_page_name, cp.lookalike_url AS corporate_page_lookalike_url,
         (SELECT count(*) FROM phishing_results pr WHERE pr.campaign_id = pc.id) AS event_count,
         (SELECT count(*) FROM phishing_results pr WHERE pr.campaign_id = pc.id AND pr.event = 'clicked') AS click_count
        FROM phishing_campaigns pc
        JOIN phishing_templates pt ON pc.template_id = pt.id
+       LEFT JOIN phishing_corporate_pages cp ON pc.corporate_page_id = cp.id
        ORDER BY pc.created_at DESC`
     );
     res.json({ data: rows });
@@ -82,15 +159,15 @@ router.get('/admin/phishing/campaigns', authenticateToken, requireAdmin, async (
 
 router.post('/admin/phishing/campaigns', authenticateToken, requireAdmin, validate(createCampaignSchema), async (req, res) => {
   try {
-    const { name, template_id, smart_group_rule, org_unit_scope, targets } = req.body;
+    const { name, template_id, smart_group_rule, org_unit_scope, targets, corporate_page_id } = req.body;
 
     // targets = { user_ids: [], ou_ids: [], group_ids: [] }
     const targetJson = targets ? JSON.stringify(targets) : null;
 
     await query(
-      `INSERT INTO phishing_campaigns (name, template_id, org_unit_scope, smart_group_rule, status, created_by)
-       VALUES (:1, :2, :3, :4, 'draft', :5)`,
-      [name, template_id, org_unit_scope || null, targetJson || JSON.stringify(smart_group_rule || null), req.user.id]
+      `INSERT INTO phishing_campaigns (name, template_id, org_unit_scope, smart_group_rule, corporate_page_id, status, created_by)
+       VALUES (:1, :2, :3, :4, :5, 'draft', :6)`,
+      [name, template_id, org_unit_scope || null, targetJson || JSON.stringify(smart_group_rule || null), corporate_page_id || null, req.user.id]
     );
 
     const { rows } = await query(
@@ -128,7 +205,7 @@ router.post('/admin/phishing/campaigns/:id/send', authenticateToken, requireAdmi
 // Editar campaña (solo draft)
 router.put('/admin/phishing/campaigns/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { name, template_id, org_unit_scope, smart_group_rule } = req.body;
+    const { name, template_id, org_unit_scope, smart_group_rule, corporate_page_id } = req.body;
     const sets = [];
     const params = [];
     let idx = 1;
@@ -137,6 +214,7 @@ router.put('/admin/phishing/campaigns/:id', authenticateToken, requireAdmin, asy
     if (template_id) { sets.push(`template_id = :${idx++}`); params.push(template_id); }
     if (org_unit_scope !== undefined) { sets.push(`org_unit_scope = :${idx++}`); params.push(org_unit_scope || null); }
     if (smart_group_rule !== undefined) { sets.push(`smart_group_rule = :${idx++}`); params.push(JSON.stringify(smart_group_rule)); }
+    if (corporate_page_id !== undefined) { sets.push(`corporate_page_id = :${idx++}`); params.push(corporate_page_id || null); }
 
     if (sets.length === 0) return res.status(400).json({ error: 'Nada que actualizar' });
 
@@ -182,6 +260,41 @@ router.get('/admin/phishing/campaigns/:id/stats', authenticateToken, requireAdmi
   }
 });
 
+// Reporte por destinatario: quién reportó, quién dio clic, quién ignoró la campaña.
+router.get('/admin/phishing/campaigns/:id/targets', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT u.id AS user_id, u.email, u.display_name,
+         CASE
+           WHEN pab.id IS NOT NULL OR agg.reported = 1 THEN 'reported'
+           WHEN agg.clicked = 1 THEN 'clicked'
+           ELSE 'ignored'
+         END AS status,
+         agg.opened_at, agg.clicked_at
+       FROM (SELECT DISTINCT user_id FROM phishing_results WHERE campaign_id = $1 AND event = 'delivered') d
+       JOIN users u ON u.id = d.user_id
+       LEFT JOIN (
+         SELECT user_id,
+           MAX(CASE WHEN event = 'clicked' THEN 1 ELSE 0 END) AS clicked,
+           MAX(CASE WHEN event = 'reported' THEN 1 ELSE 0 END) AS reported,
+           MIN(CASE WHEN event = 'opened' THEN event_at END) AS opened_at,
+           MIN(CASE WHEN event = 'clicked' THEN event_at END) AS clicked_at
+         FROM phishing_results WHERE campaign_id = $2 GROUP BY user_id
+       ) agg ON agg.user_id = u.id
+       LEFT JOIN pab_reports pab ON pab.user_id = u.id AND pab.campaign_id = $3
+       ORDER BY u.display_name`,
+      [req.params.id, req.params.id, req.params.id]
+    );
+
+    const summary = { reported: 0, clicked: 0, ignored: 0 };
+    for (const row of rows) summary[row.status]++;
+
+    res.json({ campaign_id: req.params.id, total: rows.length, summary, targets: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ============ SMART GROUP PREVIEW (admin) ============
 router.post('/admin/phishing/smart-group-preview', authenticateToken, requireAdmin, validate(smartGroupPreviewSchema), async (req, res) => {
   try {
@@ -209,7 +322,13 @@ router.get('/phish/track', async (req, res) => {
       console.log(`[PHISH] Click tracked: user=${userId}, campaign=${campaignId}`);
     }
 
-    res.redirect(`/api/phish/landing/${campaignId}`);
+    const { rows: pcRows } = await query(
+      'SELECT corporate_page_id FROM phishing_campaigns WHERE id = $1',
+      [campaignId]
+    );
+    const isPassiveCampaign = pcRows.length > 0 && !!pcRows[0].corporate_page_id;
+
+    res.redirect(`/api/phish/${isPassiveCampaign ? 'caution' : 'landing'}/${campaignId}`);
   } catch (err) {
     console.error('[PHISH-TRACK] Error:', err.message);
     res.status(500).send('Error interno');
@@ -246,6 +365,102 @@ router.get('/phish/open', async (req, res) => {
   } catch (err) {
     res.setHeader('Content-Type', 'image/gif');
     res.send(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+  }
+});
+
+// ============ PANTALLA DE PRECAUCIÓN — Ingeniería Social Pasiva ============
+// A diferencia de la landing educativa clásica, esta pantalla es deliberadamente
+// genérica: no muestra el correo enviado, no muestra banderas rojas de la
+// plantilla, y no expone ningún dato de otros destinatarios (quién reportó,
+// dio clic o ignoró la campaña). Solo recuerda la política de enlaces.
+router.get('/phish/caution/:campaignId', async (req, res) => {
+  try {
+    const { campaignId } = req.params;
+
+    const { rows } = await query(
+      `SELECT pc.id, cp.name AS corporate_page_name, cp.real_url AS corporate_page_real_url
+       FROM phishing_campaigns pc
+       LEFT JOIN phishing_corporate_pages cp ON pc.corporate_page_id = cp.id
+       WHERE pc.id = $1`,
+      [campaignId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).send('<h1>Campaña no encontrada</h1>');
+    }
+
+    const page = rows[0];
+    const baseUrl = process.env.BASE_URL || '';
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>eLearning AgroAmérica — Alto, verifique antes de continuar</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f5f5f0; color: #333; line-height: 1.6; }
+  .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+  .header { background: #001B71; color: white; padding: 30px; text-align: center; border-radius: 12px 12px 0 0; }
+  .header h1 { font-family: 'Georgia', 'Times New Roman', serif; font-size: 1.6em; margin-bottom: 8px; }
+  .header p { opacity: 0.9; }
+  .content { background: white; padding: 30px; border-radius: 0 0 12px 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+  .caution { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 20px; margin-bottom: 20px; text-align: center; }
+  .caution .icon { font-size: 2.5em; margin-bottom: 8px; }
+  .caution h2 { color: #856404; font-size: 1.2em; margin-bottom: 10px; }
+  .caution p { color: #856404; }
+  .reminder { background: #d4edda; border: 1px solid #28a745; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  .reminder h3 { color: #155724; margin-bottom: 8px; font-size: 1.05em; }
+  .reminder p { color: #155724; }
+  .lookup { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; margin-bottom: 20px; font-size: 0.95em; color: #555; }
+  .lookup strong { color: #001B71; }
+  .actions { text-align: center; }
+  .btn { display: inline-block; background: #00BC70; color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 1.05em; }
+  .btn-secondary { background: #2B5597; margin-left: 12px; }
+  .footer { text-align: center; margin-top: 30px; color: #888; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>eLearning AgroAmérica</h1>
+      <p>Concientización en Ciberseguridad — AgroAmérica</p>
+    </div>
+    <div class="content">
+      <div class="caution">
+        <div class="icon">⚠️</div>
+        <h2>Alto — este fue un ejercicio de concientización</h2>
+        <p>Este enlace formó parte de un <strong>ejercicio autorizado de ingeniería social</strong> del equipo de Ciberseguridad de AgroAmérica. No se comprometió ninguna cuenta ni dato real.</p>
+      </div>
+
+      <div class="reminder">
+        <h3>Recuerde siempre:</h3>
+        <p>No debemos dar clic a nada que no sea de las aplicaciones corporativas oficiales disponibles en el <strong>App Launcher</strong>. Si un correo lo dirige a una página fuera del App Launcher, no la abra: repórtela con el Phish Alert Button (PAB).</p>
+      </div>
+
+      ${page.corporate_page_name ? `
+      <div class="lookup">
+        ¿Buscaba <strong>${page.corporate_page_name}</strong>? Acceda siempre desde el App Launcher corporativo${page.corporate_page_real_url ? ` o directamente en <strong>${page.corporate_page_real_url}</strong>` : ''}, nunca desde un enlace recibido por correo.
+      </div>` : ''}
+
+      <div class="actions">
+        <a href="${baseUrl}/" class="btn">Ir al App Launcher</a>
+        <a href="/pab" class="btn btn-secondary">Configurar PAB</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>eLearning AgroAmérica — Plataforma de Concientización AgroAmérica</p>
+      <p>Este es un ejercicio autorizado de seguridad. Para preguntas, contacte a seguridad@agroamerica.com</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    res.status(500).send('<h1>Error al cargar la página</h1>');
   }
 });
 

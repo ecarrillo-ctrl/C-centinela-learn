@@ -17,6 +17,10 @@ export const createCampaignSchema = z.object({
   name: z.string().min(1, 'Nombre es requerido').max(500),
   template_id: z.string().min(1, 'template_id es requerido'),
   org_unit_scope: z.string().nullable().optional(),
+  // Si se define, la campaña opera en modo "ingeniería social pasiva":
+  // usa la URL look-alike de la página corporativa en el correo y, al dar
+  // clic, muestra la pantalla de precaución en vez de la landing educativa.
+  corporate_page_id: z.string().nullable().optional(),
   targets: z.object({
     user_ids: z.array(z.string()).optional().default([]),
     ou_ids: z.array(z.string()).optional().default([]),
@@ -47,3 +51,11 @@ export const pabReportSchema = z.object({
   reported_subject: z.string().min(1, 'reported_subject es requerido').max(500),
   reported_from: z.string().max(255).nullable().optional(),
 });
+
+export const createCorporatePageSchema = z.object({
+  name: z.string().min(1, 'Nombre es requerido').max(255),
+  real_url: z.string().min(1, 'real_url es requerida').max(500),
+  lookalike_url: z.string().min(1, 'lookalike_url es requerida').max(500),
+});
+
+export const updateCorporatePageSchema = createCorporatePageSchema.partial();
