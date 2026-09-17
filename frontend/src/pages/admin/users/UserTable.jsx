@@ -16,11 +16,16 @@ export default function UserTable({ fixedGroup, showGroupFilter = true }) {
   const [editUser, setEditUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(new Set());
+  const [customGroups, setCustomGroups] = useState([]);
+  const [showAddToGroup, setShowAddToGroup] = useState(false);
+  const [groupsToAdd, setGroupsToAdd] = useState(new Set());
+  const [addingToGroup, setAddingToGroup] = useState(false);
   const perPage = 50;
 
   useEffect(() => {
     if (showGroupFilter) api.get('/admin/groups/all?status=active').then(r => setAllGroups(r.data.data || [])).catch(() => { });
     api.get('/admin/org-units').then(r => setOUs(r.data.data || [])).catch(() => { });
+    api.get('/admin/groups').then(r => setCustomGroups(r.data.data || [])).catch(() => { });
   }, [showGroupFilter]);
 
   useEffect(() => { loadUsers(); }, [page, filterStatus, filterAdmins, filterGroup, search, fixedGroup]);
@@ -72,6 +77,28 @@ export default function UserTable({ fixedGroup, showGroupFilter = true }) {
     for (const id of selected) {
       try { await api.put(`/admin/users/${id}/deactivate`); } catch { }
     }
+    setSelected(new Set());
+    loadUsers();
+  }
+
+  function toggleGroupToAdd(id) {
+    setGroupsToAdd(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function confirmAddToGroups() {
+    if (selected.size === 0 || groupsToAdd.size === 0) return;
+    setAddingToGroup(true);
+    const userIds = [...selected];
+    for (const groupId of groupsToAdd) {
+      try { await api.post(`/admin/groups/${groupId}/members`, { user_ids: userIds }); } catch { }
+    }
+    setAddingToGroup(false);
+    setShowAddToGroup(false);
+    setGroupsToAdd(new Set());
     setSelected(new Set());
     loadUsers();
   }
@@ -155,9 +182,14 @@ export default function UserTable({ fixedGroup, showGroupFilter = true }) {
             {'⬇'} Generar CSV
           </button>
           {selected.size > 0 && (
-            <button onClick={bulkArchive} className="px-3 py-1.5 rounded-lg text-sm font-medium text-white bg-red-400 hover:bg-red-500">
-              Archivar ({selected.size})
-            </button>
+            <>
+              <button onClick={() => setShowAddToGroup(true)} className="px-3 py-1.5 rounded-lg text-sm font-medium text-white" style={{ backgroundColor: '#00BC70' }}>
+                + Agregar a grupo ({selected.size})
+              </button>
+              <button onClick={bulkArchive} className="px-3 py-1.5 rounded-lg text-sm font-medium text-white bg-red-400 hover:bg-red-500">
+                Archivar ({selected.size})
+              </button>
+            </>
           )}
           <input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Buscar por correo o nombre..."
             className="border rounded-lg px-3 py-1.5 text-sm w-64" />
@@ -229,6 +261,34 @@ export default function UserTable({ fixedGroup, showGroupFilter = true }) {
           <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0} className="px-3 py-1 rounded text-sm border disabled:opacity-50">Anterior</button>
           <span className="px-3 py-1 text-sm text-gray-500">Página {page + 1} de {Math.ceil(total / perPage)}</span>
           <button onClick={() => setPage(page + 1)} disabled={(page + 1) * perPage >= total} className="px-3 py-1 rounded text-sm border disabled:opacity-50">Siguiente</button>
+        </div>
+      )}
+
+      {showAddToGroup && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => { setShowAddToGroup(false); setGroupsToAdd(new Set()); }}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-title text-lg font-bold" style={{ color: '#001B71' }}>Agregar {selected.size} usuario(s) a grupo(s)</h3>
+              <button onClick={() => { setShowAddToGroup(false); setGroupsToAdd(new Set()); }} className="text-gray-400 hover:text-gray-600 text-xl">{'✕'}</button>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">Solo se puede agregar a grupos personalizados (las OUs las administra Active Directory).</p>
+            <div className="max-h-64 overflow-auto space-y-1 mb-4">
+              {customGroups.length === 0 && <p className="text-xs text-gray-400 text-center py-4">No hay grupos personalizados. Cree uno primero en la pestaña Grupos.</p>}
+              {customGroups.map(g => (
+                <label key={g.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors text-sm ${groupsToAdd.has(g.id) ? 'border-green-300 bg-green-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                  <input type="checkbox" checked={groupsToAdd.has(g.id)} onChange={() => toggleGroupToAdd(g.id)} className="w-4 h-4 rounded" />
+                  <span className="flex-1">
+                    <span className="font-medium" style={{ color: '#001B71' }}>{g.name}</span>
+                    <span className="text-xs text-gray-400 ml-2">({g.member_count || 0} miembros)</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <button onClick={confirmAddToGroups} disabled={groupsToAdd.size === 0 || addingToGroup}
+              className="w-full py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-50" style={{ backgroundColor: '#001B71' }}>
+              {addingToGroup ? 'Agregando...' : `Agregar a ${groupsToAdd.size || 0} grupo(s)`}
+            </button>
+          </div>
         </div>
       )}
 
