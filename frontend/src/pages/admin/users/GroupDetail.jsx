@@ -123,7 +123,7 @@ export default function GroupDetail() {
             </button>
           )}
         </div>
-        <UserTable key={refreshKey} fixedGroup={`${type}:${rawId}`} showGroupFilter={false} />
+        <UserTable key={refreshKey} fixedGroup={`${type === 'ou' ? 'ou' : 'cg'}:${rawId}`} showGroupFilter={false} />
       </div>
 
       {showAddMembers && (
