@@ -929,8 +929,8 @@ CREATE TABLE physical_tests (
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT pk_physical_tests PRIMARY KEY (id),
-    CONSTRAINT fk_pt_ou FOREIGN KEY (org_unit_scope) REFERENCES org_units(id),
-    CONSTRAINT fk_pt_creator FOREIGN KEY (created_by) REFERENCES users(id),
+    CONSTRAINT fk_pts_ou FOREIGN KEY (org_unit_scope) REFERENCES org_units(id),
+    CONSTRAINT fk_pts_creator FOREIGN KEY (created_by) REFERENCES users(id),
     CONSTRAINT chk_pt_type2 CHECK (test_type IN ('usb','qr')),
     CONSTRAINT chk_pt_status2 CHECK (status IN ('active','completed','cancelled'))
 );
