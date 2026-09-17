@@ -442,12 +442,8 @@ router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => 
     doc.fillColor(navy).font('Helvetica-Bold').fontSize(28)
       .text(userName, 0, 220, { align: 'center' });
 
-    const completionText = hadQuiz
-      ? `por haber completado satisfactoriamente la capacitación, aprobando el examen en su primer intento`
-      : `por haber completado satisfactoriamente la capacitación`;
-
     doc.fillColor('#555').font('Helvetica').fontSize(13)
-      .text(completionText, 100, 265, { align: 'center', width: pageW - 200 });
+      .text('por haber completado satisfactoriamente la capacitación', 100, 265, { align: 'center', width: pageW - 200 });
 
     doc.fillColor(navy).font('Helvetica-Bold').fontSize(18)
       .text(`"${courseTitle}"`, 100, 295, { align: 'center', width: pageW - 200 });
