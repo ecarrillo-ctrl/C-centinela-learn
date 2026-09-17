@@ -829,4 +829,26 @@ router.get('/pab/my-stats', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============ USER: Mis resultados de phishing simulado ============
+// Conteos por campaña recibida (no por evento), para el tablero personal:
+// cuántas campañas le llegaron, en cuántas reportó y en cuántas dio clic.
+router.get('/phishing/my-stats', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT
+         COUNT(DISTINCT CASE WHEN event = 'delivered' THEN campaign_id END) AS delivered,
+         COUNT(DISTINCT CASE WHEN event = 'reported' THEN campaign_id END) AS reported,
+         COUNT(DISTINCT CASE WHEN event = 'clicked' THEN campaign_id END) AS clicked
+       FROM phishing_results WHERE user_id = :1`,
+      [req.user.id]
+    );
+    const r = rows[0] || {};
+    res.json({
+      delivered: parseInt(r.delivered || 0, 10),
+      reported: parseInt(r.reported || 0, 10),
+      clicked: parseInt(r.clicked || 0, 10),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 export default router;
