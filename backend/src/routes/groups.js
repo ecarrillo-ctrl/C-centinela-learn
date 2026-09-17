@@ -18,6 +18,29 @@ router.get('/groups', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Listado unificado (OUs de AD + grupos personalizados) para filtros y selectores
+router.get('/groups/all', async (_req, res) => {
+  try {
+    const { rows: ous } = await query(
+      `SELECT ou.id, ou.name,
+        (SELECT COUNT(*) FROM users u WHERE u.org_unit_id = ou.id AND u.status = 'active') AS member_count
+       FROM org_units ou ORDER BY ou.name`
+    );
+    const { rows: groups } = await query(
+      `SELECT cg.id, cg.name,
+        (SELECT COUNT(*) FROM custom_group_members cgm WHERE cgm.group_id = cg.id) AS member_count
+       FROM custom_groups cg ORDER BY cg.name`
+    );
+
+    res.json({
+      data: [
+        ...ous.map(o => ({ id: `ou:${o.id}`, name: o.name, type: 'ou', member_count: o.member_count })),
+        ...groups.map(g => ({ id: `cg:${g.id}`, name: g.name, type: 'custom', member_count: g.member_count })),
+      ],
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Crear grupo
 router.post('/groups', async (req, res) => {
   try {

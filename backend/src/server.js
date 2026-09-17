@@ -26,6 +26,7 @@ import quizRoutes from './routes/quiz.js';
 import notificationsRoutes from './routes/notifications.js';
 import physicalTestsRoutes from './routes/physical-tests.js';
 import appSettingsRoutes from './routes/app-settings.js';
+import rolesRoutes from './routes/roles.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3005', 10);
@@ -192,6 +193,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin', analyticsRoutes);
 app.use('/api/admin', groupsRoutes);
 app.use('/api/admin', appSettingsRoutes);
+app.use('/api/admin', rolesRoutes);
 
 // ============ Training Campaign Launch ============
 app.post('/api/admin/training-campaigns', authenticateToken, requireAdmin, async (req, res) => {

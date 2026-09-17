@@ -1,11 +1,14 @@
 import { Router } from 'express';
-import { authenticateToken, requireAdmin } from '../middleware/auth.js';
+import { authenticateToken, requirePermission } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { refreshMaterializedViews } from '../services/risk-engine.js';
 import PDFDocument from 'pdfkit';
 
 const router = Router();
-router.use(authenticateToken, requireAdmin);
+// Los administradores completos siempre pasan; además, cualquier usuario con
+// un rol personalizado que incluya el permiso "reports" (Funciones de
+// seguridad, en el módulo de Usuarios) puede acceder sin ser admin completo.
+router.use(authenticateToken, requirePermission('reports'));
 
 router.get('/analytics/risk', async (req, res) => {
   try {

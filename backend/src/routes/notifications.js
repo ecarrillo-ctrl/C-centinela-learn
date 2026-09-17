@@ -77,8 +77,38 @@ router.put('/notifications/read-all', authenticateToken, async (req, res) => {
 // ============ ADMIN: Crear notificación ============
 router.post('/admin/notifications/create', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { title, body, category, target_scope, user_id, link_url } = req.body;
+    const { title, body, category, target_scope, user_id, group, link_url } = req.body;
     if (!title) return res.status(400).json({ error: 'title es requerido' });
+
+    // Envío a un grupo (OU o grupo personalizado): se abanica en una fila por
+    // destinatario (target_scope='user') para reutilizar el mismo camino de
+    // lectura que ya usan los usuarios, sin tocar el esquema de notificaciones.
+    if (target_scope === 'group' && group && group.includes(':')) {
+      const [gType, gId] = group.split(':');
+      let recipients = [];
+
+      if (gType === 'ou') {
+        const { rows } = await query("SELECT id FROM users WHERE org_unit_id = :1 AND status = 'active'", [gId]);
+        recipients = rows;
+      } else if (gType === 'cg') {
+        const { rows } = await query(
+          `SELECT u.id FROM custom_group_members cgm JOIN users u ON cgm.user_id = u.id
+           WHERE cgm.group_id = :1 AND u.status = 'active'`,
+          [gId]
+        );
+        recipients = rows;
+      }
+
+      for (const r of recipients) {
+        await query(
+          `INSERT INTO user_notifications (user_id, target_scope, title, body, category, link_url)
+           VALUES (:1, 'user', :2, :3, :4, :5)`,
+          [r.id, title, body || '', category || 'info', link_url || null]
+        );
+      }
+
+      return res.json({ success: true, sent_to: recipients.length });
+    }
 
     await query(
       `INSERT INTO user_notifications (user_id, target_scope, title, body, category, link_url)

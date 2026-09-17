@@ -62,7 +62,7 @@ async function authenticateCloudflare(cfToken, req, res, next) {
 
     // Buscar usuario en la BD
     const { rows } = await query(
-      `SELECT id, email, display_name, is_admin, risk_score, phish_prone, status
+      `SELECT id, email, display_name, is_admin, risk_score, phish_prone, status, last_login_at
        FROM users WHERE LOWER(email) = :1 AND status = :2`,
       [email, 'active']
     );
@@ -76,6 +76,12 @@ async function authenticateCloudflare(cfToken, req, res, next) {
         isAdmin: user.is_admin === 1,
         riskScore: user.risk_score,
       };
+
+      // Actualiza last_login_at como maximo cada 5 minutos (evita un UPDATE por cada request)
+      const staleMs = 5 * 60 * 1000;
+      if (!user.last_login_at || (Date.now() - new Date(user.last_login_at).getTime()) > staleMs) {
+        query('UPDATE users SET last_login_at = SYSTIMESTAMP WHERE id = :1', [user.id]).catch(() => {});
+      }
     } else {
       // Usuario no existe — crear automáticamente desde Cloudflare Access
       const displayName = decoded.name || email.split('@')[0];
@@ -122,4 +128,28 @@ export function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Acceso restringido a administradores' });
   }
   next();
+}
+
+/**
+ * Requiere un permiso especifico (via rol personalizado) o admin completo.
+ * Los administradores (is_admin=1) siempre pasan, sin importar sus roles.
+ */
+export function requirePermission(permission) {
+  return async (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'No autenticado' });
+    if (req.user.isAdmin) return next();
+
+    try {
+      const { rows } = await query(
+        `SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id
+         WHERE ur.user_id = :1 AND r.permissions_json LIKE :2 FETCH FIRST 1 ROWS ONLY`,
+        [req.user.id, `%"${permission}"%`]
+      );
+      if (rows.length > 0) return next();
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+
+    return res.status(403).json({ error: 'No tiene permiso para esta acción' });
+  };
 }

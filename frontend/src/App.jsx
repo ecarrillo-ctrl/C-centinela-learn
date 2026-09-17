@@ -16,7 +16,6 @@ import Profile from './pages/user/profile/Profile';
 
 // Admin pages
 import AdminDashboard from './pages/admin/Dashboard';
-import AdminUsers from './pages/admin/Users';
 import AdminCampaigns from './pages/admin/Campaigns';
 import AdminContent from './pages/admin/Content';
 import AdminPhishing from './pages/admin/phishing/Phishing';
@@ -27,6 +26,16 @@ import AdminQRTest from './pages/admin/physical/QRTest';
 import AdminReports from './pages/admin/reports/Reports';
 import AuditLog from './pages/admin/AuditLog';
 import PersonalSettings from './pages/admin/settings/PersonalSettings';
+
+// Users module sub-pages
+import UsersLayout from './pages/admin/users/UsersLayout';
+import UsersList from './pages/admin/users/UsersList';
+import UserGroups from './pages/admin/users/Groups';
+import UserImport from './pages/admin/users/Import';
+import UserProvisioning from './pages/admin/users/Provisioning';
+import UserMerge from './pages/admin/users/Merge';
+import UserMessages from './pages/admin/users/Messages';
+import SecurityRoles from './pages/admin/users/SecurityRoles';
 
 // Settings sub-pages
 import SettingsLayout from './pages/admin/settings/SettingsLayout';
@@ -70,7 +79,15 @@ export default function App() {
             <Route path="/admin" element={<AdminDashboard />} />
             <Route path="/admin/phishing" element={<AdminPhishing />} />
             <Route path="/admin/training" element={<AdminTraining />} />
-            <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/users" element={<UsersLayout />}>
+              <Route index element={<UsersList />} />
+              <Route path="groups" element={<UserGroups />} />
+              <Route path="import" element={<UserImport />} />
+              <Route path="provisioning" element={<UserProvisioning />} />
+              <Route path="merge" element={<UserMerge />} />
+              <Route path="messages" element={<UserMessages />} />
+              <Route path="security-roles" element={<SecurityRoles />} />
+            </Route>
             <Route path="/admin/asap" element={<AdminASAP />} />
             <Route path="/admin/physical/usb" element={<AdminUSBTest />} />
             <Route path="/admin/physical/qr" element={<AdminQRTest />} />
