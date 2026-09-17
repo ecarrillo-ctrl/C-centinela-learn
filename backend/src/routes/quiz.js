@@ -1,9 +1,9 @@
 import { Router } from 'express';
-import PDFDocument from 'pdfkit';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { generateQuizFromCourse, generateContentDesign, analyzeContent } from '../services/ai-quiz-generator.js';
-import { getFileInfo, getFileStream } from '../services/storage-service.js';
+import { generateDiplomaPdf, DiplomaError } from '../services/diploma-service.js';
+import { sendEmail } from '../services/mailer.js';
 
 const router = Router();
 
@@ -333,144 +333,49 @@ router.post('/admin/ai/test', authenticateToken, requireAdmin, async (req, res) 
 // ============ USUARIO: Descargar diploma de finalización ============
 router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => {
   try {
-    const { courseId } = req.params;
-
-    const { rows: enrollments } = await query(
-      `SELECT completed_at FROM training_enrollments
-       WHERE user_id = :1 AND course_id = :2 AND status = 'completed'
-       ORDER BY completed_at DESC FETCH FIRST 1 ROWS ONLY`,
-      [req.user.id, courseId]
-    );
-    if (enrollments.length === 0) {
-      return res.status(403).json({ error: 'Aún no ha completado esta capacitación' });
-    }
-
-    const { rows: attempts } = await query(
-      'SELECT passed FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2 ORDER BY attempted_at ASC FETCH FIRST 1 ROWS ONLY',
-      [req.user.id, courseId]
-    );
-    const hadQuiz = attempts.length > 0;
-    const passedFirstAttempt = !hadQuiz || attempts[0].passed === 1;
-    if (!passedFirstAttempt) {
-      return res.status(403).json({ error: 'El diploma solo se otorga si aprobó el quiz en su primer intento' });
-    }
-
-    const { rows: courseRows } = await query('SELECT title FROM courses WHERE id = :1', [courseId]);
-    if (courseRows.length === 0) return res.status(404).json({ error: 'Curso no encontrado' });
-
-    const { rows: userRows } = await query('SELECT display_name FROM users WHERE id = :1', [req.user.id]);
-    const userName = userRows[0]?.display_name || req.user.displayName || 'Usuario';
-    const courseTitle = courseRows[0].title;
-    const completedAt = enrollments[0].completed_at;
-
-    const { rows: settingRows } = await query(
-      "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('diploma_signer_name', 'diploma_signer_title', 'org_name', 'diploma_logo_size')"
-    );
-    const settingsMap = {};
-    for (const s of settingRows) settingsMap[s.setting_key] = s.setting_value;
-    const signerName = settingsMap.diploma_signer_name || 'Eddy Aguilar';
-    const signerTitle = settingsMap.diploma_signer_title || 'Director TI Corporativo';
-    const orgName = settingsMap.org_name || 'AgroAmérica';
-    const logoSize = Math.min(220, Math.max(20, parseInt(settingsMap.diploma_logo_size, 10) || 90));
-
-    // Firma escaneada (opcional) — si no hay ninguna subida, el espacio queda en blanco
-    // (no se dibuja un nombre de relleno en cursiva).
-    let signatureBuffer = null;
-    try {
-      const info = await getFileInfo('branding/signature.png');
-      if (info) {
-        const { body } = await getFileStream('branding/signature.png');
-        const chunks = [];
-        for await (const chunk of body) chunks.push(chunk);
-        signatureBuffer = Buffer.concat(chunks);
-      }
-    } catch { /* sin firma escaneada */ }
-
-    // Logo (opcional) — se sube desde Ajustes > Marca > Logotipo, mismo archivo que
-    // usan los correos y otros reportes. Se prueban las extensiones más comunes.
-    let logoBuffer = null;
-    for (const ext of ['png', 'jpg', 'jpeg']) {
-      try {
-        const info = await getFileInfo(`branding/logo.${ext}`);
-        if (info) {
-          const { body } = await getFileStream(`branding/logo.${ext}`);
-          const chunks = [];
-          for await (const chunk of body) chunks.push(chunk);
-          logoBuffer = Buffer.concat(chunks);
-          break;
-        }
-      } catch { /* no existe con esta extensión, se prueba la siguiente */ }
-    }
-
-    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 0 });
-    const chunks = [];
-    doc.on('data', c => chunks.push(c));
-    doc.on('end', () => {
-      const pdf = Buffer.concat(chunks);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="Diploma-${courseTitle.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
-      res.send(pdf);
-    });
-
-    const navy = '#001B71';
-    const green = '#00BC70';
-    const pageW = doc.page.width;
-    const pageH = doc.page.height;
-
-    // Marco decorativo
-    doc.rect(20, 20, pageW - 40, pageH - 40).lineWidth(3).stroke(navy);
-    doc.rect(30, 30, pageW - 60, pageH - 60).lineWidth(1).stroke(green);
-
-    // Logo — esquina superior izquierda. Tamaño configurable desde Ajustes > Marca.
-    if (logoBuffer) {
-      try {
-        doc.image(logoBuffer, 50, 40, { fit: [logoSize, logoSize] });
-      } catch { /* imagen inválida — se omite el logo */ }
-    }
-
-    doc.fillColor(navy).font('Helvetica-Bold').fontSize(12)
-      .text('AgroAmerica', 0, 70, { align: 'center' });
-
-    doc.fillColor(navy).font('Helvetica-Bold').fontSize(34)
-      .text('Diploma de Capacitación', 0, 110, { align: 'center' });
-
-    doc.moveTo(pageW / 2 - 100, 160).lineTo(pageW / 2 + 100, 160).lineWidth(1.5).stroke(green);
-
-    doc.fillColor('#555').font('Helvetica').fontSize(13)
-      .text('Se otorga el presente diploma a', 0, 190, { align: 'center' });
-
-    doc.fillColor(navy).font('Helvetica-Bold').fontSize(28)
-      .text(userName, 0, 220, { align: 'center' });
-
-    doc.fillColor('#555').font('Helvetica').fontSize(13)
-      .text('por haber completado satisfactoriamente la capacitación', 100, 265, { align: 'center', width: pageW - 200 });
-
-    doc.fillColor(navy).font('Helvetica-Bold').fontSize(18)
-      .text(`"${courseTitle}"`, 100, 295, { align: 'center', width: pageW - 200 });
-
-    const dateStr = completedAt ? new Date(completedAt).toLocaleDateString('es-GT', { year: 'numeric', month: 'long', day: 'numeric' }) : '';
-    doc.fillColor('#888').font('Helvetica').fontSize(11)
-      .text(`Fecha de finalización: ${dateStr}`, 0, 335, { align: 'center' });
-
-    // Firma — si hay una imagen escaneada se dibuja sobre la línea; si no, el
-    // espacio queda en blanco (no se pone un nombre de relleno en cursiva).
-    const sigY = pageH - 130;
-    const sigCenterX = pageW / 2;
-    if (signatureBuffer) {
-      try {
-        doc.image(signatureBuffer, sigCenterX - 60, sigY - 45, { width: 120, height: 45 });
-      } catch { /* imagen inválida — se ignora, el espacio queda en blanco */ }
-    }
-    doc.moveTo(sigCenterX - 100, sigY).lineTo(sigCenterX + 100, sigY).lineWidth(1).stroke('#999');
-    doc.font('Helvetica-Bold').fontSize(11).fillColor(navy)
-      .text(`${signerName}, ${signerTitle}`, sigCenterX - 150, sigY + 10, { width: 300, align: 'center' });
-
-    doc.font('Helvetica').fontSize(8).fillColor('#aaa')
-      .text(`Generado por eLearning ${orgName} — Plataforma de Concientización en Ciberseguridad`, 0, pageH - 45, { align: 'center' });
-
-    doc.end();
+    const { buffer, courseTitle } = await generateDiplomaPdf(req.user.id, req.params.courseId, req.user.displayName);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Diploma-${courseTitle.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
+    res.send(buffer);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err instanceof DiplomaError ? err.statusCode : 500).json({ error: err.message });
+  }
+});
+
+// ============ USUARIO: Enviar diploma por correo (a su propio correo) ============
+router.post('/courses/:courseId/diploma/send', authenticateToken, async (req, res) => {
+  try {
+    const { buffer, courseTitle, userName } = await generateDiplomaPdf(req.user.id, req.params.courseId, req.user.displayName);
+
+    const { rows } = await query('SELECT email FROM users WHERE id = :1', [req.user.id]);
+    const recipient = rows[0]?.email || req.user.email;
+    if (!recipient) return res.status(400).json({ error: 'No se encontró un correo para enviar el diploma' });
+
+    await sendEmail(
+      recipient,
+      `Su diploma de capacitación — ${courseTitle}`,
+      `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#001B71;color:white;padding:20px;text-align:center;">
+            <h2>eLearning AgroAmérica</h2>
+            <p style="opacity:0.8;">Su diploma de capacitación</p>
+          </div>
+          <div style="padding:20px;background:#f9f9f9;">
+            <p>Estimado(a) <strong>${userName}</strong>,</p>
+            <p>Adjunto encontrará su diploma por haber completado satisfactoriamente la capacitación
+               <strong>"${courseTitle}"</strong>.</p>
+            <p>¡Felicidades por su compromiso con la seguridad de la información!</p>
+          </div>
+          <div style="padding:10px;text-align:center;font-size:12px;color:#888;">
+            eLearning AgroAmérica — Plataforma de Concientización en Ciberseguridad
+          </div>
+        </div>`,
+      [{ filename: `Diploma-${courseTitle.replace(/[^a-z0-9]+/gi, '-')}.pdf`, content: buffer }]
+    );
+
+    res.json({ success: true, sent_to: recipient });
+  } catch (err) {
+    res.status(err instanceof DiplomaError ? err.statusCode : 500).json({ error: err.message });
   }
 });
 

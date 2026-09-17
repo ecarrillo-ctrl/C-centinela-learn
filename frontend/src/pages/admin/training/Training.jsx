@@ -71,7 +71,7 @@ export default function AdminTraining() {
     if (!confirm(`¿Lanzar la campaña "${name}"?\n\nDestinatarios: ${targetSummary || 'Toda la organización'}\n\nEsto asignará todos los cursos de la ruta a los usuarios seleccionados.`)) return;
     try {
       const { data } = await api.post(`/admin/training-campaigns/${id}/launch`);
-      alert(`Campaña lanzada:\n• ${data.users} usuarios\n• ${data.courses} cursos\n• ${data.enrollments} matrículas creadas`);
+      alert(`Campaña lanzada:\n• ${data.users} usuarios\n• ${data.courses} cursos\n• ${data.enrollments} matrículas creadas\n• ${data.emailed || 0} correos de asignación enviados`);
       loadData();
     } catch (err) { alert(err.response?.data?.error || 'Error al lanzar'); }
   }

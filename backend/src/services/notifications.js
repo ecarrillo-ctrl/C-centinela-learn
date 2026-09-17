@@ -2,26 +2,8 @@
  * eLearning AgroAmérica — Servicio de Notificaciones
  * Envía correos de vencimiento de capacitaciones a usuarios y jefes inmediatos.
  */
-import nodemailer from 'nodemailer';
 import { query } from '../db.js';
-
-let _transporter = null;
-
-function getTransporter() {
-  if (!_transporter) {
-    _transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'mailhog',
-      port: parseInt(process.env.SMTP_PORT || '587', 10),
-      secure: process.env.SMTP_SECURE === 'true',
-      ...(process.env.SMTP_USER ? {
-        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD },
-      } : {}),
-      pool: true,
-      maxConnections: 3,
-    });
-  }
-  return _transporter;
-}
+import { getTransporter, sendEmail } from './mailer.js';
 
 /**
  * Envía notificaciones de capacitaciones próximas a vencer.
@@ -287,7 +269,9 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
   const campaign = campaigns[0];
 
   const { rows: courses } = await query(
-    `SELECT course_id FROM learning_path_courses WHERE path_id = :1 ORDER BY sort_order`,
+    `SELECT lpc.course_id, c.title FROM learning_path_courses lpc
+     JOIN courses c ON lpc.course_id = c.id
+     WHERE lpc.path_id = :1 ORDER BY lpc.sort_order`,
     [campaign.path_id]
   );
 
@@ -319,14 +303,14 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
     if (targets.user_ids?.length) {
       console.log(`[LAUNCH] Resolving ${targets.user_ids.length} individual user IDs`);
       for (const uid of targets.user_ids) {
-        const { rows } = await query("SELECT id FROM users WHERE id = :1 AND status = 'active'", [uid]);
+        const { rows } = await query("SELECT id, email, display_name FROM users WHERE id = :1 AND status = 'active'", [uid]);
         if (rows.length > 0) userMap.set(rows[0].id, rows[0]);
       }
     }
     if (targets.ou_ids?.length) {
       console.log(`[LAUNCH] Resolving ${targets.ou_ids.length} OUs`);
       for (const ouId of targets.ou_ids) {
-        const { rows } = await query("SELECT id FROM users WHERE org_unit_id = :1 AND status = 'active'", [ouId]);
+        const { rows } = await query("SELECT id, email, display_name FROM users WHERE org_unit_id = :1 AND status = 'active'", [ouId]);
         for (const r of rows) userMap.set(r.id, r);
       }
     }
@@ -334,7 +318,7 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
       console.log(`[LAUNCH] Resolving ${targets.group_ids.length} custom groups`);
       for (const gid of targets.group_ids) {
         const { rows } = await query(
-          `SELECT u.id FROM custom_group_members cgm JOIN users u ON cgm.user_id = u.id WHERE cgm.group_id = :1 AND u.status = 'active'`,
+          `SELECT u.id, u.email, u.display_name FROM custom_group_members cgm JOIN users u ON cgm.user_id = u.id WHERE cgm.group_id = :1 AND u.status = 'active'`,
           [gid]
         );
         for (const r of rows) userMap.set(r.id, r);
@@ -343,11 +327,11 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
     users = Array.from(userMap.values());
     console.log(`[LAUNCH] Resolved ${users.length} users from explicit targets`);
   } else if (campaign.org_unit_scope) {
-    const { rows } = await query("SELECT id FROM users WHERE org_unit_id = :1 AND status = 'active'", [campaign.org_unit_scope]);
+    const { rows } = await query("SELECT id, email, display_name FROM users WHERE org_unit_id = :1 AND status = 'active'", [campaign.org_unit_scope]);
     users = rows;
     console.log(`[LAUNCH] Resolved ${users.length} users from org_unit_scope`);
   } else {
-    const { rows } = await query("SELECT id FROM users WHERE status = 'active'");
+    const { rows } = await query("SELECT id, email, display_name FROM users WHERE status = 'active'");
     users = rows;
     console.log(`[LAUNCH] WARNING: No targets → ALL ${users.length} active users`);
   }
@@ -355,10 +339,12 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
   if (users.length === 0) throw new Error('No hay usuarios activos en el alcance de la campaña');
 
   let created = 0;
+  let emailed = 0;
   for (const user of users) {
+    const newlyAssignedCourses = [];
     for (const course of courses) {
       try {
-        await query(
+        const { rowsAffected } = await query(
           `MERGE INTO training_enrollments te
            USING (SELECT :1 AS user_id, :2 AS course_id, :3 AS campaign_id FROM DUAL) src
            ON (te.user_id = src.user_id AND te.course_id = src.course_id AND te.campaign_id = src.campaign_id)
@@ -367,10 +353,56 @@ export async function launchTrainingCampaign(campaignId, inlineTargets = null) {
              VALUES (src.user_id, src.course_id, src.campaign_id, 'assigned', 0)`,
           [user.id, course.course_id, campaignId]
         );
-        created++;
+        if (rowsAffected > 0) {
+          created++;
+          newlyAssignedCourses.push(course);
+        }
       } catch { }
+    }
+
+    if (newlyAssignedCourses.length > 0 && user.email) {
+      try {
+        await sendAssignmentEmail(user, campaign, newlyAssignedCourses);
+        emailed++;
+      } catch (err) {
+        console.error(`[LAUNCH] Error enviando correo de asignación a ${user.email}:`, err.message);
+      }
     }
   }
 
-  return { campaign: campaign.name, users: users.length, courses: courses.length, enrollments: created };
+  return { campaign: campaign.name, users: users.length, courses: courses.length, enrollments: created, emailed };
+}
+
+async function sendAssignmentEmail(user, campaign, newCourses) {
+  const courseList = newCourses.map(c => `<li><strong>${c.title}</strong></li>`).join('');
+  const dueText = campaign.due_at
+    ? `<p>Fecha límite: <strong>${new Date(campaign.due_at).toLocaleDateString('es-GT')}</strong></p>`
+    : '';
+
+  await sendEmail(
+    user.email,
+    `Nueva capacitación asignada: ${campaign.name} — eLearning AgroAmérica`,
+    `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:#001B71;color:white;padding:20px;text-align:center;">
+          <h2>eLearning AgroAmérica</h2>
+          <p style="opacity:0.8;">Nueva capacitación asignada</p>
+        </div>
+        <div style="padding:20px;background:#f9f9f9;">
+          <p>Estimado(a) <strong>${user.display_name}</strong>,</p>
+          <p>Se le ha asignado la capacitación <strong>${campaign.name}</strong>, que incluye:</p>
+          <ul>${courseList}</ul>
+          ${dueText}
+          <p style="text-align:center;margin-top:20px;">
+            <a href="${process.env.BASE_URL || 'https://elearning.agroamerica.com'}/training"
+               style="background:#00BC70;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;font-weight:bold;">
+              Comenzar capacitación
+            </a>
+          </p>
+        </div>
+        <div style="padding:10px;text-align:center;font-size:12px;color:#888;">
+          eLearning AgroAmérica — Plataforma de Concientización en Ciberseguridad
+        </div>
+      </div>`
+  );
 }
