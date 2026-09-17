@@ -59,3 +59,10 @@ export const createCorporatePageSchema = z.object({
 });
 
 export const updateCorporatePageSchema = createCorporatePageSchema.partial();
+
+export const createDomainSchema = z.object({
+  domain: z.string().min(1, 'domain es requerido').max(255),
+  notes: z.string().max(1000).nullable().optional(),
+});
+
+export const updateDomainSchema = createDomainSchema.partial();

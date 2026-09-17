@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
-import { createTemplateSchema, createCampaignSchema, smartGroupPreviewSchema, pabReportSchema, createCorporatePageSchema, updateCorporatePageSchema } from '../schemas/phishing.js';
+import { createTemplateSchema, createCampaignSchema, smartGroupPreviewSchema, pabReportSchema, createCorporatePageSchema, updateCorporatePageSchema, createDomainSchema, updateDomainSchema } from '../schemas/phishing.js';
 import { query } from '../db.js';
 import { applyRiskEvent, markPhishProne } from '../services/risk-engine.js';
 import {
@@ -57,6 +57,145 @@ router.delete('/admin/phishing/templates/:id', authenticateToken, requireAdmin, 
       [req.params.id]
     );
     if (rowsAffected === 0) return res.status(404).json({ error: 'Plantilla no encontrada' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ DESCRIPCIÓN GENERAL (admin) ============
+router.get('/admin/phishing/overview', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows: counts } = await query(
+      `SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN status IN ('scheduled', 'sending') THEN 1 ELSE 0 END) AS active,
+        SUM(CASE WHEN status IN ('draft', 'completed') THEN 1 ELSE 0 END) AS inactive,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS sent
+       FROM phishing_campaigns`
+    );
+
+    const { rows: recent } = await query(
+      `SELECT pc.id, pc.name, pc.smart_group_rule,
+              pt.name AS template_name, pt.category AS template_category,
+              ou.name AS org_unit_name,
+              (SELECT COUNT(DISTINCT pr.user_id) FROM phishing_results pr WHERE pr.campaign_id = pc.id AND pr.event = 'delivered') AS delivered_count,
+              (SELECT COUNT(DISTINCT pr.user_id) FROM phishing_results pr WHERE pr.campaign_id = pc.id AND pr.event = 'clicked') AS clicked_count
+       FROM phishing_campaigns pc
+       JOIN phishing_templates pt ON pc.template_id = pt.id
+       LEFT JOIN org_units ou ON pc.org_unit_scope = ou.id
+       WHERE pc.status = 'completed'
+       ORDER BY pc.sent_at DESC
+       FETCH FIRST 5 ROWS ONLY`
+    );
+
+    const recentCampaigns = recent.map(c => {
+      let groupLabel = 'Todos los usuarios';
+      if (c.org_unit_name) {
+        groupLabel = c.org_unit_name;
+      } else if (c.smart_group_rule) {
+        try {
+          const parsed = JSON.parse(c.smart_group_rule);
+          if (parsed && (parsed.user_ids?.length || parsed.ou_ids?.length || parsed.group_ids?.length)) {
+            groupLabel = 'Destinatarios específicos';
+          } else if (parsed && (parsed.org_unit_id || parsed.min_risk_score !== undefined)) {
+            groupLabel = 'Grupo dinámico';
+          }
+        } catch { /* deja el valor por defecto */ }
+      }
+
+      const delivered = parseInt(c.delivered_count, 10) || 0;
+      const clicked = parseInt(c.clicked_count, 10) || 0;
+
+      return {
+        id: c.id,
+        name: c.name,
+        theme: c.template_category || c.template_name,
+        group_label: groupLabel,
+        phish_prone_pct: delivered > 0 ? Math.round((clicked / delivered) * 1000) / 10 : 0,
+      };
+    });
+
+    res.json({
+      total_campaigns: parseInt(counts[0]?.total || 0, 10),
+      active_campaigns: parseInt(counts[0]?.active || 0, 10),
+      inactive_campaigns: parseInt(counts[0]?.inactive || 0, 10),
+      sent_tests: parseInt(counts[0]?.sent || 0, 10),
+      recent_campaigns: recentCampaigns,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============ DOMINIOS (admin) — registro informativo de dominios autorizados ============
+router.get('/admin/phishing/domains', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query(
+      'SELECT id, domain, notes, is_active, created_at FROM phishing_domains WHERE is_active = 1 ORDER BY domain'
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/phishing/domains', authenticateToken, requireAdmin, validate(createDomainSchema), async (req, res) => {
+  try {
+    const { domain, notes } = req.body;
+
+    await query(
+      'INSERT INTO phishing_domains (domain, notes, created_by) VALUES (:1, :2, :3)',
+      [domain, notes || null, req.user.id]
+    );
+
+    const { rows } = await query(
+      'SELECT id, domain, notes, created_at FROM phishing_domains WHERE domain = :1',
+      [domain]
+    );
+
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES ($1, 'phishing_domain_create', 'phishing_domain', $2, $3)",
+      [req.user.id, rows[0].id, JSON.stringify({ domain })]
+    );
+
+    res.json({ data: rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/admin/phishing/domains/:id', authenticateToken, requireAdmin, validate(updateDomainSchema), async (req, res) => {
+  try {
+    const { domain, notes } = req.body;
+    const sets = [];
+    const params = [];
+    let idx = 1;
+
+    if (domain) { sets.push(`domain = :${idx++}`); params.push(domain); }
+    if (notes !== undefined) { sets.push(`notes = :${idx++}`); params.push(notes); }
+
+    if (sets.length === 0) return res.status(400).json({ error: 'Nada que actualizar' });
+
+    const { rowsAffected } = await query(
+      `UPDATE phishing_domains SET ${sets.join(', ')} WHERE id = :${idx}`,
+      [...params, req.params.id]
+    );
+    if (rowsAffected === 0) return res.status(404).json({ error: 'Dominio no encontrado' });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/admin/phishing/domains/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rowsAffected } = await query(
+      'UPDATE phishing_domains SET is_active = 0 WHERE id = $1',
+      [req.params.id]
+    );
+    if (rowsAffected === 0) return res.status(404).json({ error: 'Dominio no encontrado' });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

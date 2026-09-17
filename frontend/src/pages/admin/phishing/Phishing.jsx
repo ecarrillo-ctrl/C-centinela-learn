@@ -1,21 +1,26 @@
 import { useState, useEffect } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../../../lib/api';
 import TargetSelector from '../../../components/TargetSelector';
 
 export default function AdminPhishing() {
-  const [tab, setTab] = useState('campaigns');
+  const [tab, setTab] = useState('overview');
   const [campaigns, setCampaigns] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [corporatePages, setCorporatePages] = useState([]);
+  const [domains, setDomains] = useState([]);
+  const [overview, setOverview] = useState(null);
   const [ous, setOUs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [showNewCorporatePage, setShowNewCorporatePage] = useState(false);
+  const [showNewDomain, setShowNewDomain] = useState(false);
   const [editCampaign, setEditCampaign] = useState(null);
   const [templateForm, setTemplateForm] = useState({ name: '', subject: '', html_body: '', difficulty: 'medium', category: '', red_flags: [] });
   const [campaignForm, setCampaignForm] = useState({ name: '', template_id: '', org_unit_scope: '', corporate_page_id: '', targets: { user_ids: [], ou_ids: [], group_ids: [] } });
   const [corporatePageForm, setCorporatePageForm] = useState({ name: '', real_url: '', lookalike_url: '' });
+  const [domainForm, setDomainForm] = useState({ domain: '', notes: '' });
   const [showTargetSelector, setShowTargetSelector] = useState(false);
   const [stats, setStats] = useState(null);
   const [targetReport, setTargetReport] = useState(null);
@@ -25,18 +30,40 @@ export default function AdminPhishing() {
   async function loadData() {
     setLoading(true);
     try {
-      const [c, t, cp, o] = await Promise.all([
+      const [c, t, cp, d, ov, o] = await Promise.all([
         api.get('/admin/phishing/campaigns'),
         api.get('/admin/phishing/templates'),
         api.get('/admin/phishing/corporate-pages').catch(() => ({ data: { data: [] } })),
+        api.get('/admin/phishing/domains').catch(() => ({ data: { data: [] } })),
+        api.get('/admin/phishing/overview').catch(() => ({ data: null })),
         api.get('/admin/org-units').catch(() => ({ data: { data: [] } })),
       ]);
       setCampaigns(c.data.data || []);
       setTemplates(t.data.data || []);
       setCorporatePages(cp.data.data || []);
+      setDomains(d.data.data || []);
+      setOverview(ov.data);
       setOUs(o.data.data || []);
     } catch { }
     setLoading(false);
+  }
+
+  async function createDomain(e) {
+    e.preventDefault();
+    try {
+      await api.post('/admin/phishing/domains', domainForm);
+      setShowNewDomain(false);
+      setDomainForm({ domain: '', notes: '' });
+      loadData();
+    } catch (err) { alert(err.response?.data?.error || 'Error'); }
+  }
+
+  async function deleteDomain(id) {
+    if (!confirm('¿Desactivar este dominio?')) return;
+    try {
+      await api.delete(`/admin/phishing/domains/${id}`);
+      loadData();
+    } catch (err) { alert(err.response?.data?.error || 'Error al eliminar'); }
   }
 
   async function createTemplate(e) {
@@ -138,10 +165,12 @@ export default function AdminPhishing() {
   }
 
   const tabs = [
+    { id: 'overview', label: 'Descripción general' },
     { id: 'campaigns', label: 'Campañas' },
-    { id: 'templates', label: 'Plantillas' },
-    { id: 'corporate-pages', label: 'Páginas corporativas' },
-    { id: 'results', label: 'Resultados' },
+    { id: 'templates', label: 'Plantillas de phishing' },
+    { id: 'corporate-pages', label: 'Páginas de destino' },
+    { id: 'domains', label: 'Dominios' },
+    { id: 'results', label: 'Informes' },
   ];
 
   if (loading) return <div className="text-center py-12 text-gray-400">Cargando...</div>;
@@ -166,6 +195,11 @@ export default function AdminPhishing() {
               + Nueva página
             </button>
           )}
+          {tab === 'domains' && (
+            <button onClick={() => setShowNewDomain(true)} className="px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
+              + Nuevo dominio
+            </button>
+          )}
         </div>
       </div>
 
@@ -177,6 +211,49 @@ export default function AdminPhishing() {
           </button>
         ))}
       </div>
+
+      {/* OVERVIEW TAB */}
+      {tab === 'overview' && overview && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="font-title font-bold" style={{ color: '#001B71' }}>Últimas cinco campañas de phishing</h3>
+            <p className="text-xs text-gray-400 mb-4">Porcentaje de destinatarios que dieron clic (Phish-prone), por campaña.</p>
+            {overview.recent_campaigns.length === 0 ? (
+              <p className="text-gray-400 text-center py-12">Aún no hay campañas enviadas.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={Math.max(220, overview.recent_campaigns.length * 70)}>
+                <BarChart data={overview.recent_campaigns} layout="vertical" margin={{ left: 10, right: 30 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f0f0f0" />
+                  <XAxis type="number" unit="%" tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 11 }}
+                    tickFormatter={(name) => {
+                      const c = overview.recent_campaigns.find(x => x.name === name);
+                      return c ? `${c.theme}` : name;
+                    }} />
+                  <Tooltip formatter={(v) => [`${v}%`, 'Phish-prone']} labelFormatter={(name) => {
+                    const c = overview.recent_campaigns.find(x => x.name === name);
+                    return c ? `${c.name} — ${c.group_label}` : name;
+                  }} />
+                  <Bar dataKey="phish_prone_pct" fill="#2B5597" radius={[0, 4, 4, 0]} barSize={22} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 h-fit">
+            <h3 className="font-title font-bold mb-4" style={{ color: '#001B71' }}>Todas las campañas</h3>
+            <div className="space-y-4">
+              <OverviewRow label="Total de campañas" value={overview.total_campaigns} />
+              <OverviewRow label="Campañas activas" value={overview.active_campaigns} />
+              <OverviewRow label="Campañas inactivas" value={overview.inactive_campaigns} />
+              <OverviewRow label="Pruebas de seguridad contra el phishing" value={overview.sent_tests} />
+            </div>
+          </div>
+        </div>
+      )}
+      {tab === 'overview' && !overview && (
+        <p className="text-gray-400 text-center py-12">Cargando descripción general...</p>
+      )}
 
       {/* CAMPAIGNS TAB */}
       {tab === 'campaigns' && (
@@ -303,6 +380,28 @@ export default function AdminPhishing() {
                 <p className="text-xs text-gray-400">Look-alike: {p.lookalike_url}</p>
               </div>
               <button onClick={() => deleteCorporatePage(p.id)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50">
+                Eliminar
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* DOMAINS TAB */}
+      {tab === 'domains' && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-400">
+            Registro informativo de dominios usados o autorizados en campañas de phishing simulado (dominios de envío,
+            dominios look-alike, etc.). Es solo un listado de referencia para el equipo de seguridad.
+          </p>
+          {domains.length === 0 && <p className="text-gray-400 text-center py-8">No hay dominios registrados.</p>}
+          {domains.map(d => (
+            <div key={d.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex items-center justify-between">
+              <div>
+                <p className="font-medium" style={{ color: '#001B71' }}>{d.domain}</p>
+                {d.notes && <p className="text-xs text-gray-400 mt-1">{d.notes}</p>}
+              </div>
+              <button onClick={() => deleteDomain(d.id)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50">
                 Eliminar
               </button>
             </div>
@@ -454,6 +553,30 @@ export default function AdminPhishing() {
           </form>
         </Modal>
       )}
+
+      {/* MODAL: Nuevo Dominio */}
+      {showNewDomain && (
+        <Modal title="Nuevo dominio" onClose={() => setShowNewDomain(false)}>
+          <form onSubmit={createDomain} className="space-y-4">
+            <Input label="Dominio" value={domainForm.domain} onChange={v => setDomainForm({ ...domainForm, domain: v })} placeholder="agroamerica-seguridad.com" required />
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Notas (opcional)</label>
+              <textarea value={domainForm.notes} onChange={e => setDomainForm({ ...domainForm, notes: e.target.value })}
+                className="w-full border rounded-lg px-3 py-2 text-sm h-16" placeholder="ej: dominio de envío para campañas Q1" />
+            </div>
+            <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>Registrar dominio</button>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function OverviewRow({ label, value }) {
+  return (
+    <div className="flex items-center justify-between border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+      <p className="text-sm text-gray-600">{label}</p>
+      <p className="text-xl font-bold" style={{ color: '#001B71' }}>{value}</p>
     </div>
   );
 }
