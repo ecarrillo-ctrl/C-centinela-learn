@@ -202,7 +202,7 @@ export function Integrations() {
               onChange={v => set('smtp_from', v)} placeholder="noreply@agroamerica.com" />
           </div>
           <p className="text-xs text-gray-400 mt-2">
-            Las credenciales SMTP se configuran via variables de entorno (SMTP_USER, SMTP_PASS) por seguridad.
+            Las credenciales SMTP se configuran vía variables de entorno del servidor (SMTP_USER, SMTP_PASSWORD) por seguridad.
           </p>
         </div>
         <hr className="border-gray-100" />

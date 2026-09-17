@@ -2,28 +2,35 @@ import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import { query } from '../db.js';
 import { computeDelta, applyRiskEvent, markPhishProne } from './risk-engine.js';
+import { getSmtpConfig } from './mailer.js';
 
-// Singleton transporter — se crea una vez al importar el módulo
+// Singleton transporter — se recrea si cambia el host/puerto configurado en
+// Ajustes > Integraciones (o las variables de entorno, como respaldo). El
+// rate limit alto (bulk) es propio de este módulo, no se comparte con mailer.js.
 let _transporter = null;
+let _cacheKey = null;
 
-function getTransporter() {
-  if (!_transporter) {
-    _transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST || 'mailhog',
-      port: parseInt(process.env.SMTP_PORT || '1025', 10),
-      secure: process.env.SMTP_SECURE === 'true',
-      ...(process.env.SMTP_USER ? {
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASSWORD,
-        },
-      } : {}),
-      pool: true,
-      maxConnections: 5,
-      maxMessages: 100,
-      rateLimit: 10,
-    });
-  }
+async function getTransporter() {
+  const cfg = await getSmtpConfig();
+  const cacheKey = `${cfg.host}:${cfg.port}`;
+  if (_transporter && _cacheKey === cacheKey) return _transporter;
+
+  _transporter = nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: process.env.SMTP_SECURE === 'true',
+    ...(process.env.SMTP_USER ? {
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    } : {}),
+    pool: true,
+    maxConnections: 5,
+    maxMessages: 100,
+    rateLimit: 10,
+  });
+  _cacheKey = cacheKey;
   return _transporter;
 }
 
@@ -200,9 +207,9 @@ export async function sendPhishingCampaign(campaignId) {
 
 async function sendEmail(to, subject, html) {
   try {
-    const transporter = getTransporter();
+    const [transporter, cfg] = await Promise.all([getTransporter(), getSmtpConfig()]);
     await transporter.sendMail({
-      from: process.env.SMTP_FROM || '"eLearning AgroAmérica" <noreply@agroamerica.com>',
+      from: cfg.from,
       to,
       subject,
       html,

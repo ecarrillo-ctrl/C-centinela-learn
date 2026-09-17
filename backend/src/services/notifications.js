@@ -3,7 +3,7 @@
  * Envía correos de vencimiento de capacitaciones a usuarios y jefes inmediatos.
  */
 import { query } from '../db.js';
-import { getTransporter, sendEmail } from './mailer.js';
+import { sendEmail } from './mailer.js';
 
 /**
  * Envía notificaciones de capacitaciones próximas a vencer.
@@ -34,7 +34,6 @@ export async function notifyUpcomingDue() {
 
   if (rows.length === 0) return { sent: 0, pending: 0, message: `No hay capacitaciones por vencer en los próximos ${reminderDays} días` };
 
-  const transporter = getTransporter();
   let sent = 0;
 
   // Agrupar por usuario
@@ -51,11 +50,10 @@ export async function notifyUpcomingDue() {
     ).join('');
 
     try {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || '"eLearning AgroAmérica" <noreply@agroamerica.com>',
-        to: email,
-        subject: `Recordatorio: Capacitaciones por vencer — eLearning AgroAmérica`,
-        html: `
+      await sendEmail(
+        email,
+        `Recordatorio: Capacitaciones por vencer — eLearning AgroAmérica`,
+        `
           <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
             <div style="background:#001B71;color:white;padding:20px;text-align:center;">
               <h2>eLearning AgroAmérica</h2>
@@ -75,8 +73,8 @@ export async function notifyUpcomingDue() {
             <div style="padding:10px;text-align:center;font-size:12px;color:#888;">
               eLearning AgroAmérica — Plataforma de Concientización en Ciberseguridad
             </div>
-          </div>`,
-      });
+          </div>`
+      );
       sent++;
     } catch (err) {
       console.error(`[NOTIFY] Error enviando a ${email}:`, err.message);
@@ -115,7 +113,6 @@ export async function notifyManagersOverdue() {
 
   if (admins.length === 0) return { sent: 0, message: 'No hay administradores para notificar' };
 
-  const transporter = getTransporter();
   let sent = 0;
 
   const ouList = rows.map(r =>
@@ -131,11 +128,10 @@ export async function notifyManagersOverdue() {
 
   for (const admin of admins) {
     try {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || '"eLearning AgroAmérica" <noreply@agroamerica.com>',
-        to: admin.email,
-        subject: `Alerta: ${totalUsers} usuarios con capacitaciones vencidas — eLearning AgroAmérica`,
-        html: `
+      await sendEmail(
+        admin.email,
+        `Alerta: ${totalUsers} usuarios con capacitaciones vencidas — eLearning AgroAmérica`,
+        `
           <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
             <div style="background:#001B71;color:white;padding:20px;text-align:center;">
               <h2>eLearning AgroAmérica</h2>
@@ -171,8 +167,8 @@ export async function notifyManagersOverdue() {
             <div style="padding:10px;text-align:center;font-size:12px;color:#888;">
               Este es un correo automático. No responder.
             </div>
-          </div>`,
-      });
+          </div>`
+      );
       sent++;
     } catch (err) {
       console.error(`[NOTIFY-MGR] Error enviando a ${admin.email}:`, err.message);
@@ -201,7 +197,6 @@ export async function notifyOverdueUsers() {
 
   if (rows.length === 0) return { sent: 0, message: 'No hay capacitaciones vencidas para notificar' };
 
-  const transporter = getTransporter();
   let sent = 0;
 
   // Agrupar por usuario
@@ -218,11 +213,10 @@ export async function notifyOverdueUsers() {
     ).join('');
 
     try {
-      await transporter.sendMail({
-        from: process.env.SMTP_FROM || '"eLearning AgroAmérica" <noreply@agroamerica.com>',
-        to: email,
-        subject: `ALERTA: Tiene capacitaciones vencidas — eLearning AgroAmérica`,
-        html: `
+      await sendEmail(
+        email,
+        `ALERTA: Tiene capacitaciones vencidas — eLearning AgroAmérica`,
+        `
           <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
             <div style="background:#e74c3c;color:white;padding:20px;text-align:center;">
               <h2>eLearning AgroAmérica</h2>
@@ -243,8 +237,8 @@ export async function notifyOverdueUsers() {
             <div style="padding:10px;text-align:center;font-size:12px;color:#888;">
               Este es un correo automático — eLearning AgroAmérica
             </div>
-          </div>`,
-      });
+          </div>`
+      );
       sent++;
     } catch (err) {
       console.error(`[NOTIFY-OVERDUE] Error enviando a ${email}:`, err.message);
