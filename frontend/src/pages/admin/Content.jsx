@@ -36,6 +36,7 @@ export default function AdminContent() {
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [showNewQuestion, setShowNewQuestion] = useState(false);
+  const [editingQuestionId, setEditingQuestionId] = useState(null); // null = pregunta nueva
   const [editingCourse, setEditingCourse] = useState(null);
   const [uploadPct, setUploadPct] = useState(null); // null = sin subida en curso
   const [qForm, setQForm] = useState({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
@@ -112,12 +113,15 @@ export default function AdminContent() {
     const validOptions = qForm.options.filter(o => o.text.trim());
     if (validOptions.length < 2) { alert('Agregue al menos 2 opciones'); return; }
     if (!validOptions.some(o => o.correct)) { alert('Marque al menos una opción correcta'); return; }
+    const body = {
+      question_text: qForm.question_text,
+      question_type: 'multiple_choice',
+      options: validOptions.map(o => ({ text: o.text, correct: o.correct })),
+    };
     try {
-      await api.post(`/admin/courses/${selectedCourse.id}/questions`, {
-        question_text: qForm.question_text,
-        question_type: 'multiple_choice',
-        options: validOptions.map(o => ({ text: o.text, correct: o.correct })),
-      });
+      if (editingQuestionId) await api.put(`/admin/courses/${selectedCourse.id}/questions/${editingQuestionId}`, body);
+      else await api.post(`/admin/courses/${selectedCourse.id}/questions`, body);
+      setEditingQuestionId(null);
       setShowNewQuestion(false);
       setQForm({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
       selectCourse(selectedCourse);
@@ -230,7 +234,11 @@ export default function AdminContent() {
               <p className="text-xs text-gray-400">{questions.length} pregunta(s) · Tipo: {selectedCourse.course_type}</p>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => setShowNewQuestion(true)}
+              <button onClick={() => {
+                setEditingQuestionId(null);
+                setQForm({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
+                setShowNewQuestion(true);
+              }}
                 className="px-3 py-2 rounded-lg text-white text-xs font-medium" style={{ backgroundColor: '#00BC70' }}>
                 + Pregunta
               </button>
@@ -287,11 +295,12 @@ export default function AdminContent() {
                     <p className="text-sm font-medium flex-1" style={{ color: '#001B71' }}>{i + 1}. {q.question_text}</p>
                     <div className="flex gap-1 shrink-0">
                       <button onClick={() => {
-                        const newText = prompt('Editar pregunta:', q.question_text);
-                        if (newText && newText !== q.question_text) {
-                          api.put(`/admin/courses/${selectedCourse.id}/questions/${q.id}`, { question_text: newText })
-                            .then(() => selectCourse(selectedCourse)).catch(() => { });
-                        }
+                        setEditingQuestionId(q.id);
+                        setQForm({
+                          question_text: q.question_text,
+                          options: (q.options || []).map(o => ({ text: o.option_text, correct: Number(o.is_correct) === 1 })),
+                        });
+                        setShowNewQuestion(true);
                       }} className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-500 hover:bg-gray-50">Editar</button>
                       <button onClick={() => deleteQuestion(q.id)} className="text-xs px-2 py-1 rounded border border-red-200 text-red-400 hover:bg-red-50">Eliminar</button>
                     </div>
@@ -335,7 +344,7 @@ export default function AdminContent() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setShowNewQuestion(false)}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-title text-lg font-bold" style={{ color: '#001B71' }}>Nueva pregunta</h3>
+              <h3 className="font-title text-lg font-bold" style={{ color: '#001B71' }}>{editingQuestionId ? 'Editar pregunta' : 'Nueva pregunta'}</h3>
               <button onClick={() => setShowNewQuestion(false)} className="text-gray-400 hover:text-gray-600 text-xl">{'\u2715'}</button>
             </div>
             <form onSubmit={addQuestion} className="space-y-4">
@@ -369,7 +378,7 @@ export default function AdminContent() {
                   className="text-xs text-blue-600 mt-2 hover:underline">+ Agregar opción</button>
               </div>
               <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
-                Agregar pregunta
+                {editingQuestionId ? 'Guardar cambios' : 'Agregar pregunta'}
               </button>
             </form>
           </div>

@@ -71,10 +71,31 @@ router.post('/admin/courses/:courseId/questions', authenticateToken, requireAdmi
 // Editar pregunta
 router.put('/admin/courses/:courseId/questions/:questionId', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { question_text } = req.body;
+    const { question_text, options } = req.body;
     if (!question_text) return res.status(400).json({ error: 'question_text requerido' });
-    await query('UPDATE course_questions SET question_text = :1 WHERE id = :2 AND course_id = :3',
+
+    // Las opciones se validan antes de tocar nada, para no dejar la pregunta a medias.
+    let cleanOptions = null;
+    if (Array.isArray(options)) {
+      cleanOptions = options.filter(o => o && String(o.text || '').trim());
+      if (cleanOptions.length < 2) return res.status(400).json({ error: 'Agregue al menos 2 opciones' });
+      if (!cleanOptions.some(o => o.correct)) return res.status(400).json({ error: 'Marque al menos una opción correcta' });
+    }
+
+    const { rowsAffected } = await query('UPDATE course_questions SET question_text = :1 WHERE id = :2 AND course_id = :3',
       [question_text, req.params.questionId, req.params.courseId]);
+    if (rowsAffected === 0) return res.status(404).json({ error: 'Pregunta no encontrada' });
+
+    if (cleanOptions) {
+      // Las respuestas de los usuarios no referencian opciones, así que se pueden reemplazar.
+      await query('DELETE FROM course_question_options WHERE question_id = :1', [req.params.questionId]);
+      for (let i = 0; i < cleanOptions.length; i++) {
+        await query(
+          'INSERT INTO course_question_options (question_id, option_text, is_correct, sort_order) VALUES (:1, :2, :3, :4)',
+          [req.params.questionId, String(cleanOptions[i].text).trim(), cleanOptions[i].correct ? 1 : 0, i + 1]
+        );
+      }
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
