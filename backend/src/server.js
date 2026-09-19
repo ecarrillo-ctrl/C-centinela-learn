@@ -27,6 +27,7 @@ import notificationsRoutes from './routes/notifications.js';
 import physicalTestsRoutes from './routes/physical-tests.js';
 import appSettingsRoutes from './routes/app-settings.js';
 import rolesRoutes from './routes/roles.js';
+import { ensureBadgeCatalog } from './services/badges.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3005', 10);
@@ -395,6 +396,13 @@ async function start() {
   }
 
   await ensureAdminUser();
+
+  try {
+    const created = await ensureBadgeCatalog();
+    if (created > 0) console.log(`[BADGES] ${created} insignia(s) del catálogo creada(s)`);
+  } catch (err) {
+    console.error('[BADGES] No se pudo sembrar el catálogo de insignias:', err.message);
+  }
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`eLearning AgroAmérica API running on http://0.0.0.0:${PORT}`);

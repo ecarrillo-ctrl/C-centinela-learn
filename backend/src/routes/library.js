@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { applyRiskEvent } from '../services/risk-engine.js';
+import { evaluateBadges } from '../services/badges.js';
 
 const router = Router();
 
@@ -254,87 +255,33 @@ router.post('/admin/badges', authenticateToken, requireAdmin, async (req, res) =
 router.get('/library/badges', authenticateToken, async (req, res) => {
   try {
     const { rows } = await query(
-      `SELECT b.id, b.name, b.description, b.icon_url, ub.earned_at,
+      `SELECT b.id, b.name, b.description, b.icon_url, b.criteria_json, ub.earned_at,
               CASE WHEN ub.id IS NOT NULL THEN 1 ELSE 0 END AS earned
        FROM badges b
        LEFT JOIN user_badges ub ON ub.badge_id = b.id AND ub.user_id = :1
-       ORDER BY b.created_at DESC`,
+       ORDER BY CASE WHEN ub.id IS NOT NULL THEN 0 ELSE 1 END, ub.earned_at DESC, b.created_at`,
       [req.user.id]
     );
-    res.json({ data: rows });
+    // El criterio completo no se expone; solo la pista de "cómo obtenerla".
+    const data = rows.map(({ criteria_json, ...b }) => {
+      let hint = null;
+      try { hint = JSON.parse(criteria_json || '{}').hint || null; } catch { /* sin pista */ }
+      return { ...b, hint };
+    });
+    res.json({ data });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Check and award badges for current user
+// Revisa y otorga las insignias pendientes del usuario actual
 router.post('/library/check-badges', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    let awarded = 0;
-
-    // Get all badges the user hasn't earned yet
-    const { rows: badges } = await query(
-      `SELECT b.id, b.name, b.criteria_json
-       FROM badges b
-       WHERE NOT EXISTS (SELECT 1 FROM user_badges ub WHERE ub.badge_id = b.id AND ub.user_id = :1)`,
-      [userId]
-    );
-
-    for (const badge of badges) {
-      let criteria;
-      try { criteria = JSON.parse(badge.criteria_json || '{}'); } catch { continue; }
-
-      let earned = false;
-
-      if (criteria.type === 'learning_path' && criteria.path_id) {
-        // Check if all courses in path are completed
-        const { rows: coursesInPath } = await query(
-          `SELECT lpc.course_id FROM learning_path_courses lpc WHERE lpc.path_id = :1`,
-          [criteria.path_id]
-        );
-        if (coursesInPath.length > 0) {
-          const { rows: completed } = await query(
-            `SELECT COUNT(*) AS cnt FROM training_enrollments te
-             WHERE te.user_id = :1 AND te.status = 'completed'
-             AND te.course_id IN (SELECT course_id FROM learning_path_courses WHERE path_id = :2)`,
-            [userId, criteria.path_id]
-          );
-          earned = parseInt(completed[0]?.cnt || 0) >= coursesInPath.length;
-        }
-      } else if (criteria.type === 'pab_count' && criteria.min) {
-        const { rows: pabCount } = await query(
-          'SELECT COUNT(*) AS cnt FROM pab_reports WHERE user_id = :1',
-          [userId]
-        );
-        earned = parseInt(pabCount[0]?.cnt || 0) >= criteria.min;
-      } else if (criteria.type === 'zero_clicks') {
-        const { rows: clicks } = await query(
-          "SELECT COUNT(*) AS cnt FROM phishing_results WHERE user_id = :1 AND event = 'clicked'",
-          [userId]
-        );
-        earned = parseInt(clicks[0]?.cnt || 0) === 0;
-      } else if (criteria.type === 'all_courses_completed') {
-        const { rows: enrollments } = await query(
-          `SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS done
-           FROM training_enrollments WHERE user_id = :1`,
-          [userId]
-        );
-        const total = parseInt(enrollments[0]?.total || 0);
-        const done = parseInt(enrollments[0]?.done || 0);
-        earned = total > 0 && total === done;
-      }
-
-      if (earned) {
-        try {
-          await query(
-            'INSERT INTO user_badges (user_id, badge_id) VALUES (:1, :2)',
-            [userId, badge.id]
-          );
-          awarded++;
-        } catch { } // ignore duplicates
-      }
-    }
-
-    res.json({ success: true, awarded, message: awarded > 0 ? `${awarded} insignia(s) otorgada(s)` : 'No hay nuevas insignias' });
+    const badges = await evaluateBadges(req.user.id);
+    res.json({
+      success: true,
+      awarded: badges.length,
+      badges,
+      message: badges.length > 0 ? `${badges.length} insignia(s) otorgada(s)` : 'No hay nuevas insignias',
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

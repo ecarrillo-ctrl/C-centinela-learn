@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../lib/api';
+import BadgeIcon from '../../components/BadgeIcon';
 import { useAuth } from '../../context/AuthContext';
 
 const LEVEL_INFO = {
@@ -164,7 +165,7 @@ export default function UserDashboard() {
             {badges.map(b => (
               <div key={b.id} className="flex items-center gap-2 px-3 py-2 rounded-lg border text-sm"
                 style={{ borderColor: '#00BC70', color: '#001B71' }}>
-                {'\u{1F3C5}'} {b.name}
+                <BadgeIcon name={b.icon_url} size={28} /> {b.name}
               </div>
             ))}
           </div>

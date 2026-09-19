@@ -11,7 +11,7 @@ export default function LearnerLayout() {
     { to: '/', label: 'Tablero', exact: true },
     { to: '/training', label: 'Capacitacion' },
     { to: '/library', label: 'Biblioteca' },
-    { to: '/badges', label: 'Insignias' },
+    { to: '/badges', label: 'Logros' },
     { to: '/messages', label: 'Mensajes' },
     ...(flags.mobileApp ? [{ to: '/mobile-app', label: 'App movil' }] : []),
   ];

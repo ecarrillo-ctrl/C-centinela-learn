@@ -3,6 +3,7 @@ import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { generateQuizFromCourse, generateContentDesign, analyzeContent } from '../services/ai-quiz-generator.js';
 import { generateDiplomaPdf, DiplomaError } from '../services/diploma-service.js';
+import { evaluateBadgesSafe, awardBadgesByType } from '../services/badges.js';
 import { sendEmail } from '../services/mailer.js';
 
 const router = Router();
@@ -162,12 +163,17 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
       );
     }
 
+    // Insignias: el intento ya está registrado, así que "Primer intento", "Héroe cibernético",
+    // "Triplete", etc. se evalúan con datos reales y se otorgan al instante.
+    const newBadges = passed ? await evaluateBadgesSafe(req.user.id) : [];
+
     res.json({
       success: true,
       score,
       passed,
       correct,
       total,
+      new_badges: newBadges,
       diploma_eligible: passed,
       message: passed ? 'Aprobado. Capacitación completada.' : `Reprobado (${score}%). Necesita 70% para aprobar. Puede intentar de nuevo.`,
     });
@@ -208,7 +214,9 @@ router.post('/courses/:courseId/acknowledge', authenticateToken, async (req, res
       );
     }
 
-    res.json({ success: true, message: 'Confirmación de aprendizaje registrada', diploma_eligible: true });
+    const newBadges = await evaluateBadgesSafe(req.user.id);
+
+    res.json({ success: true, message: 'Confirmación de aprendizaje registrada', diploma_eligible: true, new_badges: newBadges });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -326,6 +334,8 @@ router.post('/admin/ai/test', authenticateToken, requireAdmin, async (req, res) 
 router.get('/courses/:courseId/diploma', authenticateToken, async (req, res) => {
   try {
     const { buffer, courseTitle } = await generateDiplomaPdf(req.user.id, req.params.courseId, req.user.displayName);
+    // Insignia "Graduado": se otorga al descargar el diploma (no bloquea la descarga si falla).
+    awardBadgesByType(req.user.id, 'diploma_downloaded').catch(() => { });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Diploma-${courseTitle.replace(/[^a-z0-9]+/gi, '-')}.pdf"`);
     res.send(buffer);

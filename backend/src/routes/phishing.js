@@ -4,6 +4,7 @@ import { validate } from '../middleware/validate.js';
 import { createTemplateSchema, createCampaignSchema, smartGroupPreviewSchema, pabReportSchema, createCorporatePageSchema, updateCorporatePageSchema, createDomainSchema, updateDomainSchema } from '../schemas/phishing.js';
 import { query } from '../db.js';
 import { applyRiskEvent, markPhishProne } from '../services/risk-engine.js';
+import { evaluateBadgesSafe } from '../services/badges.js';
 import {
   generateTrackingToken, decodeTrackingToken,
   getSmartGroupRecipients, sendPhishingCampaign, sendTestEmail, trackEvent,
@@ -734,7 +735,7 @@ router.get('/phish/landing/:campaignId', async (req, res) => {
 // ============ PHISH ALERT BUTTON (PAB) — lógica compartida ============
 // La usan tanto el botón PAB dentro de la app (usuario autenticado) como el
 // Add-on de Gmail/Outlook (usuario identificado por su correo, ver más abajo).
-async function recordPabReport(userId, reportedSubject, reportedFrom, ip, userAgent) {
+async function recordPabReportCore(userId, reportedSubject, reportedFrom, ip, userAgent) {
   await query(
     `INSERT INTO pab_reports (user_id, reported_subject, reported_from, was_simulated)
      VALUES ($1, $2, $3, 0)`,
@@ -776,6 +777,13 @@ async function recordPabReport(userId, reportedSubject, reportedFrom, ip, userAg
   await applyRiskEvent(userId, -5, 'Reporte de correo sospechoso real con PAB', 'pab', rows[0].id);
 
   return { success: true, message: 'Gracias por reportar este correo. El equipo de seguridad lo revisará.', was_simulated: false };
+}
+
+// Registra el reporte y, si corresponde, otorga insignias (Vigilante, Caza-anzuelos...).
+async function recordPabReport(userId, reportedSubject, reportedFrom, ip, userAgent) {
+  const result = await recordPabReportCore(userId, reportedSubject, reportedFrom, ip, userAgent);
+  result.new_badges = await evaluateBadgesSafe(userId);
+  return result;
 }
 
 router.post('/pab/report', authenticateToken, validate(pabReportSchema), async (req, res) => {

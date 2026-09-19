@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../lib/api';
+import BadgeIcon from './BadgeIcon';
 
 const STEPS = { CONTENT: 'content', QUIZ: 'quiz', SUMMARY: 'summary', COMPLETE: 'complete' };
 
@@ -10,6 +11,7 @@ export default function CourseViewer({ course, onClose }) {
   const [answers, setAnswers] = useState({});
   const [lockedQuestions, setLockedQuestions] = useState(new Set());
   const [quizResult, setQuizResult] = useState(null);
+  const [newBadges, setNewBadges] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [downloadingDiploma, setDownloadingDiploma] = useState(false);
   const [emailingDiploma, setEmailingDiploma] = useState(false);
@@ -37,7 +39,8 @@ export default function CourseViewer({ course, onClose }) {
   async function acknowledge() {
     setSubmitting(true);
     try {
-      await api.post(`/courses/${courseId}/acknowledge`);
+      const { data: ackData } = await api.post(`/courses/${courseId}/acknowledge`);
+      setNewBadges(ackData.new_badges || []);
       setStep(STEPS.SUMMARY);
     } catch (err) { alert(err.response?.data?.error || 'Error'); }
     setSubmitting(false);
@@ -72,6 +75,7 @@ export default function CourseViewer({ course, onClose }) {
       }));
       const { data } = await api.post(`/courses/${courseId}/quiz/submit`, { answers: payload });
       setQuizResult(data);
+      setNewBadges(data.new_badges || []);
       if (data.passed) setStep(STEPS.SUMMARY);
     } catch (err) { alert(err.response?.data?.error || 'Error al enviar'); }
     setSubmitting(false);
@@ -390,6 +394,22 @@ export default function CourseViewer({ course, onClose }) {
               <p className="text-sm text-gray-500 mb-6">
                 Su progreso ha sido registrado. Siga aplicando estos conocimientos en su trabajo diario.
               </p>
+              {newBadges.length > 0 && (
+                <div className="mb-5 space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-wider" style={{ color: '#F26B30' }}>
+                    {newBadges.length === 1 ? '¡Nueva insignia!' : '¡Nuevas insignias!'}
+                  </p>
+                  {newBadges.map(b => (
+                    <div key={b.id} className="flex items-center gap-3 text-left p-3 rounded-lg" style={{ backgroundColor: '#FFE8DE' }}>
+                      <BadgeIcon name={b.icon_url} size={44} />
+                      <div>
+                        <p className="text-sm font-bold text-gray-800">{b.name}</p>
+                        <p className="text-xs text-gray-600 leading-snug">{b.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex gap-2 mb-3">
                 <button onClick={downloadDiploma} disabled={downloadingDiploma}
                   className="flex-1 px-4 py-3 rounded-lg text-sm font-bold text-white transition-all hover:scale-[1.02] disabled:opacity-50 flex items-center justify-center gap-2"
