@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, raw as expressRaw } from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -11,7 +11,7 @@ import { upload } from '../middleware/upload.js';
 import { parseSCORM, unwrapSCORMZip } from '../services/scorm-parser.js';
 import { query } from '../db.js';
 import {
-  uploadFile, getPresignedUrl, getVideoStreamUrl, getFileStream,
+  uploadFile, deleteFile, getPresignedUrl, getVideoStreamUrl, getFileStream,
   getFileInfo, deletePrefix, uploadScormPackage, getScormFileUrl,
   getPrefix, PREFIXES,
 } from '../services/storage-service.js';
@@ -119,17 +119,13 @@ function guessContentType(filename) {
 // UPLOAD — Subir contenido (video, PDF, presentación) a S3
 // ============================================================================
 
-router.post('/admin/content/upload', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Archivo requerido' });
-    }
-
-    const file = req.file;
+async function createCourseFromFile(file, body, user) {
+  {
+    const req = { user, body };
     const ext = path.extname(file.originalname).toLowerCase();
-    const title = req.body.title || path.basename(file.originalname, ext);
-    const level = req.body.level || 'basico';
-    const description = req.body.description || '';
+    const title = body.title || path.basename(file.originalname, ext);
+    const level = body.level || 'basico';
+    const description = body.description || '';
 
     let type = 'pdf';
     if (['.mp4', '.webm', '.mov', '.avi', '.mkv'].includes(ext)) type = 'video_upload';
@@ -167,9 +163,67 @@ router.post('/admin/content/upload', authenticateToken, requireAdmin, upload.sin
       [req.user.id, rows[0]?.ID || rows[0]?.id, JSON.stringify({ filename: file.originalname, type, level, s3Key })]
     );
 
-    res.json({ success: true, course: { id: rows[0]?.ID || rows[0]?.id, title, type, level } });
+    return { success: true, course: { id: rows[0]?.ID || rows[0]?.id, title, type, level } };
+  }
+}
+
+router.post('/admin/content/upload', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Archivo requerido' });
+    res.json(await createCourseFromFile(req.file, req.body, req.user));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// SUBIDA POR PARTES — Cloudflare limita cada petición a 100 MB, así que los archivos
+// grandes se envían en partes de pocos MB y se ensamblan aquí antes de subirlos a S3.
+// ============================================================================
+
+const CHUNK_ROOT = path.join(os.tmpdir(), 'upload-chunks');
+const safeUploadId = id => /^[a-zA-Z0-9-]{8,64}$/.test(id || '');
+
+router.post('/admin/content/chunk', authenticateToken, requireAdmin,
+  expressRaw({ type: 'application/octet-stream', limit: '30mb' }), async (req, res) => {
+    try {
+      const { uploadId, index } = req.query;
+      if (!safeUploadId(uploadId) || !/^\d{1,5}$/.test(index || '') || !Buffer.isBuffer(req.body) || !req.body.length) {
+        return res.status(400).json({ error: 'Parte inválida' });
+      }
+      const dir = path.join(CHUNK_ROOT, uploadId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${index}.part`), req.body);
+      res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+router.post('/admin/content/chunk/complete', authenticateToken, requireAdmin, async (req, res) => {
+  const { uploadId, total, filename, mode, replaceId } = req.body;
+  const dir = path.join(CHUNK_ROOT, String(uploadId));
+  try {
+    if (!safeUploadId(uploadId) || !filename || !Number.isInteger(total) || total < 1) {
+      return res.status(400).json({ error: 'Datos de subida inválidos' });
+    }
+    const parts = [];
+    for (let i = 0; i < total; i++) {
+      const p = path.join(dir, `${i}.part`);
+      if (!fs.existsSync(p)) return res.status(400).json({ error: `Falta la parte ${i + 1} de ${total}` });
+      parts.push(fs.readFileSync(p));
+    }
+    const file = { originalname: path.basename(String(filename)), buffer: Buffer.concat(parts) };
+    if (file.buffer.length > 2 * 1024 * 1024 * 1024) return res.status(400).json({ error: 'Archivo demasiado grande' });
+
+    if (mode === 'replace') {
+      if (!replaceId) return res.status(400).json({ error: 'replaceId requerido' });
+      res.json(await replaceCourseFile(file, replaceId));
+    } else {
+      res.json(await createCourseFromFile(file, req.body, req.user));
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (safeUploadId(uploadId)) fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -621,12 +675,8 @@ router.put('/admin/content/:id', authenticateToken, requireAdmin, async (req, re
 });
 
 // Replace file for existing course
-router.post('/admin/content/replace', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file || !req.body.replaceId) return res.status(400).json({ error: 'file y replaceId requeridos' });
-
-    const courseId = req.body.replaceId;
-    const file = req.file;
+async function replaceCourseFile(file, courseId) {
+  {
     const ext = path.extname(file.originalname).toLowerCase();
 
     let type = 'pdf';
@@ -642,13 +692,47 @@ router.post('/admin/content/replace', authenticateToken, requireAdmin, upload.si
 
     await uploadFile(s3Key, file.buffer, contentType);
 
-    // Update course with new file
+    // Al pasar a un archivo propio se limpia el enlace externo anterior
     await query(
-      'UPDATE courses SET storage_key = :1, course_type = :2 WHERE id = :3',
+      'UPDATE courses SET storage_key = :1, course_type = :2, external_id = NULL, source_url = NULL WHERE id = :3',
       [s3Key, type, courseId]
     );
 
-    res.json({ success: true, type, s3Key });
+    return { success: true, type, s3Key };
+  }
+}
+
+router.post('/admin/content/replace', authenticateToken, requireAdmin, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file || !req.body.replaceId) return res.status(400).json({ error: 'file y replaceId requeridos' });
+    res.json(await replaceCourseFile(req.file, req.body.replaceId));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Quitar el video (archivo subido o enlace) de un curso sin retirar el curso
+router.delete('/admin/content/:id/media', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query(
+      'SELECT storage_key, course_type FROM courses WHERE id = :1 AND deleted_at IS NULL',
+      [req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Curso no encontrado' });
+    if (!['video_upload', 'video_embed'].includes(rows[0].course_type)) {
+      return res.status(400).json({ error: 'Este contenido no es un video' });
+    }
+
+    if (rows[0].storage_key) {
+      try { await deleteFile(rows[0].storage_key); } catch (e) { console.error('[CONTENT] No se pudo borrar de S3:', e.message); }
+    }
+    await query(
+      "UPDATE courses SET storage_key = NULL, external_id = NULL, source_url = NULL, course_type = 'video_embed' WHERE id = :1",
+      [req.params.id]
+    );
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id) VALUES (:1, 'content_media_remove', 'course', :2)",
+      [req.user.id, req.params.id]
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

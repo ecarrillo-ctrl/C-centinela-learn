@@ -2,6 +2,27 @@ import { useState, useEffect } from 'react';
 import api from '../../lib/api';
 import CourseViewer from '../../components/CourseViewer';
 
+// Cloudflare rechaza peticiones de más de 100 MB: los archivos se envían en partes de 20 MB.
+const CHUNK_SIZE = 20 * 1024 * 1024;
+
+async function uploadInChunks(file, fields, onProgress) {
+  const total = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+  const uploadId = crypto.randomUUID();
+  for (let i = 0; i < total; i++) {
+    await api.post(`/admin/content/chunk?uploadId=${uploadId}&index=${i}`, file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE), {
+      headers: { 'Content-Type': 'application/octet-stream' }, timeout: 0,
+    });
+    onProgress?.(Math.round(((i + 1) / total) * 100));
+  }
+  return api.post('/admin/content/chunk/complete', { uploadId, total, filename: file.name, ...fields }, { timeout: 0 });
+}
+
+function errorText(err, fallback) {
+  if (err.response?.data?.error) return err.response.data.error;
+  if (err.response?.status === 413) return 'El archivo es demasiado grande para el servidor.';
+  return `${fallback}${err.message ? ` (${err.message})` : ''}`;
+}
+
 export default function AdminContent() {
   const [courses, setCourses] = useState([]);
   const [catalog, setCatalog] = useState([]);
@@ -16,6 +37,7 @@ export default function AdminContent() {
   const [questions, setQuestions] = useState([]);
   const [showNewQuestion, setShowNewQuestion] = useState(false);
   const [editingCourse, setEditingCourse] = useState(null);
+  const [uploadPct, setUploadPct] = useState(null); // null = sin subida en curso
   const [qForm, setQForm] = useState({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
 
   useEffect(() => {
@@ -25,16 +47,13 @@ export default function AdminContent() {
 
   const handleUpload = async (e) => {
     e.preventDefault();
-    const fd = new FormData();
-    fd.append('title', upload.title);
-    fd.append('level', upload.level);
-    fd.append('description', upload.description);
-    fd.append('file', upload.file);
+    setUploadPct(0);
     try {
-      await api.post('/admin/content/upload', fd);
+      await uploadInChunks(upload.file, { mode: 'new', title: upload.title, level: upload.level, description: upload.description }, setUploadPct);
       setUpload({ title: '', level: 'basico', description: '', file: null });
       api.get('/admin/content').then(r => setCourses(r.data.data || []));
-    } catch (err) { alert(err.response?.data?.error || 'Error al subir'); }
+    } catch (err) { alert(errorText(err, 'Error al subir')); }
+    setUploadPct(null);
   };
 
   const handleAddLink = async (e) => {
@@ -143,8 +162,8 @@ export default function AdminContent() {
               <option value="basico">Básico</option><option value="intermedio">Intermedio</option><option value="avanzado">Avanzado</option>
             </select>
             <input type="file" onChange={e => setUpload({ ...upload, file: e.target.files[0] })} className="w-full text-sm" required />
-            <button type="submit" className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
-              Subir archivo
+            <button type="submit" disabled={uploadPct !== null} className="w-full py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-60" style={{ backgroundColor: '#001B71' }}>
+              {uploadPct !== null ? `Subiendo archivo... ${uploadPct}%` : 'Subir archivo'}
             </button>
           </form>
         </div>
@@ -191,7 +210,7 @@ export default function AdminContent() {
                 <span className="text-xs text-gray-400">{c.enrollment_count || 0} inscritos</span>
                 <button onClick={() => setPreviewCourse(c)}
                   className="text-xs text-green-600 hover:text-green-800">Ver</button>
-                <button onClick={() => setEditingCourse({ id: c.id, title: c.title, level: c.level_type, description: c.description || '', file: null, isVideoEmbed: c.course_type === 'video_embed', videoUrl: '' })}
+                <button onClick={() => setEditingCourse({ id: c.id, title: c.title, level: c.level_type, description: c.description || '', file: null, isVideoEmbed: c.course_type === 'video_embed', isVideo: c.course_type?.includes('video'), videoUrl: '' })}
                   className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
                 <button onClick={() => handleDelete(c.id)} className="text-xs text-red-500 hover:text-red-700">Retirar</button>
               </div>
@@ -409,21 +428,29 @@ export default function AdminContent() {
                   });
                   // If new file, upload and replace
                   if (editingCourse.file) {
-                    const fd = new FormData();
-                    fd.append('title', editingCourse.title);
-                    fd.append('level', editingCourse.level);
-                    fd.append('description', editingCourse.description);
-                    fd.append('file', editingCourse.file);
-                    fd.append('replaceId', editingCourse.id);
-                    await api.post('/admin/content/replace', fd);
+                    setUploadPct(0);
+                    await uploadInChunks(editingCourse.file, { mode: 'replace', replaceId: editingCourse.id }, setUploadPct);
                   }
                   setEditingCourse(null);
                   api.get('/admin/content').then(r => setCourses(r.data.data || []));
                   if (selectedCourse?.id === editingCourse.id) selectCourse({ ...selectedCourse, title: editingCourse.title, description: editingCourse.description });
-                } catch (err) { alert(err.response?.data?.error || 'Error al guardar'); }
-              }} className="w-full py-2.5 rounded-lg text-white text-sm font-medium" style={{ backgroundColor: '#001B71' }}>
-                Guardar cambios
+                } catch (err) { alert(errorText(err, 'Error al guardar')); }
+                setUploadPct(null);
+              }} disabled={uploadPct !== null} className="w-full py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-60" style={{ backgroundColor: '#001B71' }}>
+                {uploadPct !== null ? `Subiendo archivo... ${uploadPct}%` : 'Guardar cambios'}
               </button>
+              {editingCourse.isVideo && (
+                <button type="button" disabled={uploadPct !== null} onClick={async () => {
+                  if (!confirm('¿Eliminar el video de este contenido? El archivo o enlace se quitará; el contenido seguirá en la lista.')) return;
+                  try {
+                    await api.delete(`/admin/content/${editingCourse.id}/media`);
+                    setEditingCourse(null);
+                    api.get('/admin/content').then(r => setCourses(r.data.data || []));
+                  } catch (err) { alert(errorText(err, 'Error al eliminar el video')); }
+                }} className="w-full py-2.5 rounded-lg text-sm font-medium text-red-500 border border-red-200 hover:bg-red-50 disabled:opacity-60">
+                  Eliminar video
+                </button>
+              )}
             </div>
           </div>
         </div>
