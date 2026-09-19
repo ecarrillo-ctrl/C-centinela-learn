@@ -248,7 +248,7 @@ router.get('/content/stream/:courseId', authenticateToken, async (req, res) => {
     const { courseId } = req.params;
 
     const { rows: courses } = await query(
-      'SELECT id, storage_key, external_id, course_type FROM courses WHERE id = $1 AND deleted_at IS NULL AND is_active = 1',
+      'SELECT id, storage_key, external_id, source_url, course_type FROM courses WHERE id = $1 AND deleted_at IS NULL AND is_active = 1',
       [courseId]
     );
     if (courses.length === 0) {
@@ -268,8 +268,8 @@ router.get('/content/stream/:courseId', authenticateToken, async (req, res) => {
     if (course.course_type === 'video_embed') {
       return res.json({
         type: 'video_embed',
-        external_id: course.external_id || course.storage_key,
-        embed_url: `https://www.youtube.com/embed/${course.external_id || course.storage_key}`,
+        external_id: course.external_id || course.storage_key || null,
+        source_url: course.source_url || null,
       });
     }
 
@@ -601,11 +601,17 @@ router.put('/admin/content/:id/description', authenticateToken, requireAdmin, as
 // Edit course (title, level, description)
 router.put('/admin/content/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { title, level, description } = req.body;
+    const { title, level, description, video_url } = req.body;
     const sets = [];
     const params = [];
     let idx = 1;
     if (title) { sets.push(`title = :${idx++}`); params.push(title); }
+    if (video_url && String(video_url).trim()) {
+      const url = String(video_url).trim();
+      const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+      sets.push(`external_id = :${idx++}`); params.push(yt ? yt[1] : url);
+      sets.push(`source_url = :${idx++}`); params.push(url);
+    }
     if (level) { sets.push(`level_type = :${idx++}`); params.push(level); }
     if (description !== undefined) { sets.push(`description = :${idx++}`); params.push(description); }
     if (sets.length === 0) return res.status(400).json({ error: 'Nada que actualizar' });

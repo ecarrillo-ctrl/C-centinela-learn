@@ -65,6 +65,17 @@ export default function AdminContent() {
   };
 
   const handleImport = async (item) => {
+    if (item.type === 'video_embed') {
+      // El catálogo solo trae videos de ejemplo: el administrador indica el enlace real.
+      const url = (prompt(`Pegue el enlace de YouTube o Vimeo para "${item.title}":`) || '').trim();
+      if (!url) return;
+      const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/);
+      try {
+        await api.post('/admin/content/embed', { title: item.title, description: item.description || '', level: item.level, external_id: yt ? yt[1] : url, source_url: url, source_license: item.license });
+        window.location.reload();
+      } catch (err) { alert(err.response?.data?.error || 'Error al importar'); }
+      return;
+    }
     try { await api.post('/library/catalog/import', { catalogId: item.id, title: item.title, level: item.level, type: item.type, source: item.source, sourceUrl: item.sourceUrl, license: item.license }); window.location.reload(); } catch { }
   };
 
@@ -180,7 +191,7 @@ export default function AdminContent() {
                 <span className="text-xs text-gray-400">{c.enrollment_count || 0} inscritos</span>
                 <button onClick={() => setPreviewCourse(c)}
                   className="text-xs text-green-600 hover:text-green-800">Ver</button>
-                <button onClick={() => setEditingCourse({ id: c.id, title: c.title, level: c.level_type, description: c.description || '', file: null })}
+                <button onClick={() => setEditingCourse({ id: c.id, title: c.title, level: c.level_type, description: c.description || '', file: null, isVideoEmbed: c.course_type === 'video_embed', videoUrl: '' })}
                   className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
                 <button onClick={() => handleDelete(c.id)} className="text-xs text-red-500 hover:text-red-700">Retirar</button>
               </div>
@@ -373,6 +384,14 @@ export default function AdminContent() {
                   onChange={e => setEditingCourse({ ...editingCourse, description: e.target.value })}
                   className="w-full border rounded-lg px-3 py-2 text-sm h-28 resize-y" />
               </div>
+              {editingCourse.isVideoEmbed && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Enlace del video (YouTube o Vimeo)</label>
+                  <input value={editingCourse.videoUrl} onChange={e => setEditingCourse({ ...editingCourse, videoUrl: e.target.value })}
+                    className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="https://www.youtube.com/watch?v=..." />
+                  <p className="text-xs text-gray-400 mt-1">Deje vacío para conservar el enlace actual.</p>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Reemplazar archivo (opcional)</label>
                 <input type="file" onChange={e => setEditingCourse({ ...editingCourse, file: e.target.files[0] })}
@@ -386,6 +405,7 @@ export default function AdminContent() {
                     title: editingCourse.title,
                     level: editingCourse.level,
                     description: editingCourse.description,
+                    video_url: editingCourse.videoUrl,
                   });
                   // If new file, upload and replace
                   if (editingCourse.file) {

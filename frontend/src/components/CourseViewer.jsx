@@ -15,6 +15,7 @@ export default function CourseViewer({ course, onClose }) {
   const [submitting, setSubmitting] = useState(false);
   const [downloadingDiploma, setDownloadingDiploma] = useState(false);
   const [emailingDiploma, setEmailingDiploma] = useState(false);
+  const [videoSrc, setVideoSrc] = useState(undefined); // undefined = cargando, '' = sin video configurado
 
   const courseId = course.id || course.ID;
   const courseType = course.type || course.course_type || course.COURSE_TYPE;
@@ -22,6 +23,14 @@ export default function CourseViewer({ course, onClose }) {
   const courseDesc = course.description || course.DESCRIPTION || '';
 
   useEffect(() => { loadQuiz(); }, [courseId]);
+
+  // La lista de cursos no trae el enlace del video: se pide aparte.
+  useEffect(() => {
+    if (courseType !== 'video_embed') return;
+    api.get(`/content/stream/${courseId}`)
+      .then(({ data }) => setVideoSrc(getEmbedUrl(data.external_id || data.source_url)))
+      .catch(() => setVideoSrc(''));
+  }, [courseId, courseType]);
 
   async function loadQuiz() {
     try {
@@ -180,13 +189,18 @@ export default function CourseViewer({ course, onClose }) {
                   </video>
                 </div>
               )}
-              {courseType === 'video_embed' && (course.external_id || course.EXTERNAL_ID) && (
-                <iframe src={getEmbedUrl(course.external_id || course.EXTERNAL_ID || course.source_url || course.SOURCE_URL)}
-                  className="w-full h-full border-0" allowFullScreen title="Video" />
+              {courseType === 'video_embed' && videoSrc && (
+                <iframe src={videoSrc} className="w-full h-full border-0" title="Video"
+                  allow="accelerometer; autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen />
               )}
-              {courseType === 'video_embed' && !(course.external_id || course.EXTERNAL_ID) && (
-                <iframe src={`/api/content/pdf/${courseId}`} className="w-full h-full border-0" title="Contenido"
-                  sandbox="allow-same-origin allow-scripts" />
+              {courseType === 'video_embed' && videoSrc === '' && (
+                <div className="w-full h-full flex items-center justify-center bg-gray-900 p-6 text-center">
+                  <div>
+                    <div className="text-5xl mb-4">{'\u{1F3AC}'}</div>
+                    <p className="text-white font-bold mb-1">Este video aún no está disponible</p>
+                    <p className="text-white/60 text-sm">El administrador debe configurar el enlace del video.</p>
+                  </div>
+                </div>
               )}
               {(courseType === 'pdf' || courseType === 'presentation' || courseType === 'document') && (
                 <iframe src={`/api/content/pdf/${courseId}#toolbar=0&navpanes=0`} className="w-full h-full border-0" title="Documento"
@@ -451,8 +465,8 @@ function getEmbedUrl(idOrUrl) {
   if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
   // Just a video ID (11 chars)
   if (/^[a-zA-Z0-9_-]{11}$/.test(str)) return `https://www.youtube.com/embed/${str}?rel=0`;
-  // Generic URL — try embedding directly
-  return str;
+  // Sin un enlace de video reconocible no hay nada que incrustar
+  return /^https?:\/\//.test(str) ? str : '';
 }
 
 function StepDot({ active, done, label }) {
