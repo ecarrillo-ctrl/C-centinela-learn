@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import { query } from '../db.js';
 import { applyRiskEvent } from '../services/risk-engine.js';
-import { evaluateBadges } from '../services/badges.js';
+import { evaluateBadges, BADGE_CRITERIA_TYPES, rememberDeletedBadgeKey } from '../services/badges.js';
 
 const router = Router();
 
@@ -234,21 +234,83 @@ router.get('/admin/badges', authenticateToken, requireAdmin, async (_req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+function validateBadgeInput({ name, criteria }) {
+  if (!name || !String(name).trim()) return 'name es requerido';
+  if (!criteria || !BADGE_CRITERIA_TYPES.includes(criteria.type)) return 'Tipo de criterio inválido';
+  return null;
+}
+
 router.post('/admin/badges', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, description, icon_url, criteria } = req.body;
-    if (!name) return res.status(400).json({ error: 'name es requerido' });
+    const invalid = validateBadgeInput(req.body);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const { rows: dup } = await query('SELECT 1 FROM badges WHERE UPPER(name) = UPPER(:1)', [name.trim()]);
+    if (dup.length > 0) return res.status(400).json({ error: 'Ya existe una insignia con ese nombre' });
 
     await query(
       'INSERT INTO badges (name, description, icon_url, criteria_json) VALUES (:1, :2, :3, :4)',
-      [name, description || '', icon_url || null, JSON.stringify(criteria || {})]
+      [name.trim(), description || '', icon_url || null, JSON.stringify(criteria)]
     );
 
     const { rows } = await query(
       `SELECT id, name, description FROM badges WHERE name = :1 ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY`,
-      [name]
+      [name.trim()]
+    );
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES (:1, 'badge_create', 'badge', :2, :3)",
+      [req.user.id, rows[0].id, JSON.stringify({ name: name.trim() })]
     );
     res.json({ data: rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.put('/admin/badges/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { name, description, icon_url, criteria } = req.body;
+    const invalid = validateBadgeInput(req.body);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const { rows: existing } = await query('SELECT criteria_json FROM badges WHERE id = :1', [req.params.id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Insignia no encontrada' });
+
+    const { rows: dup } = await query('SELECT 1 FROM badges WHERE UPPER(name) = UPPER(:1) AND id != :2', [name.trim(), req.params.id]);
+    if (dup.length > 0) return res.status(400).json({ error: 'Ya existe otra insignia con ese nombre' });
+
+    // La clave interna de las insignias integradas se conserva aunque se edite el criterio.
+    let oldKey;
+    try { oldKey = JSON.parse(existing[0].criteria_json || '{}').key; } catch { /* sin clave */ }
+    const newCriteria = oldKey ? { ...criteria, key: oldKey } : criteria;
+
+    await query(
+      'UPDATE badges SET name = :1, description = :2, icon_url = :3, criteria_json = :4 WHERE id = :5',
+      [name.trim(), description || '', icon_url || null, JSON.stringify(newCriteria), req.params.id]
+    );
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES (:1, 'badge_update', 'badge', :2, :3)",
+      [req.user.id, req.params.id, JSON.stringify({ name: name.trim() })]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.delete('/admin/badges/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { rows } = await query('SELECT name, criteria_json FROM badges WHERE id = :1', [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Insignia no encontrada' });
+
+    let key;
+    try { key = JSON.parse(rows[0].criteria_json || '{}').key; } catch { /* sin clave */ }
+    if (key) await rememberDeletedBadgeKey(key);
+
+    // user_badges se elimina en cascada: los usuarios pierden esta insignia.
+    await query('DELETE FROM badges WHERE id = :1', [req.params.id]);
+    await query(
+      "INSERT INTO audit_log (actor_id, action, entity_type, entity_id, details_json) VALUES (:1, 'badge_delete', 'badge', :2, :3)",
+      [req.user.id, req.params.id, JSON.stringify({ name: rows[0].name })]
+    );
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

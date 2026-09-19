@@ -87,6 +87,8 @@ const GLYPHS = {
   ),
 };
 
+export const BADGE_ICON_KEYS = Object.keys(GLYPHS);
+
 export default function BadgeIcon({ name, size = 72, locked = false, color = '#F26B30' }) {
   const stroke = locked ? '#B8BEC7' : color;
 

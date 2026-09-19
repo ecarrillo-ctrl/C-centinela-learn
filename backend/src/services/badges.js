@@ -69,16 +69,68 @@ export const BADGE_CATALOG = [
   },
 ];
 
-/** Inserta en `badges` las insignias del catálogo que aún no existan (por nombre). */
+// Tipos de criterio que el evaluador entiende (los mismos que ofrece el formulario de admin).
+export const BADGE_CRITERIA_TYPES = [
+  'first_login', 'courses_completed', 'first_attempt_pass', 'courses_in_window', 'completed_hour_range',
+  'pab_count', 'reported_simulated', 'no_clicks_min_campaigns', 'all_courses_completed', 'learning_path',
+  'diploma_downloaded', 'zero_clicks',
+];
+
+const DELETED_KEYS_SETTING = 'badges_deleted_keys';
+
+export async function getDeletedBadgeKeys() {
+  const { rows } = await query('SELECT setting_value FROM app_settings WHERE setting_key = :1', [DELETED_KEYS_SETTING]);
+  try { return new Set(JSON.parse(rows[0]?.setting_value || '[]')); } catch { return new Set(); }
+}
+
+/** Recuerda que un admin eliminó una insignia integrada, para que no se vuelva a sembrar al reiniciar. */
+export async function rememberDeletedBadgeKey(key) {
+  const keys = await getDeletedBadgeKeys();
+  keys.add(key);
+  const value = JSON.stringify([...keys]);
+  await query(
+    `MERGE INTO app_settings a USING (SELECT :1 AS setting_key FROM DUAL) src ON (a.setting_key = src.setting_key)
+     WHEN MATCHED THEN UPDATE SET setting_value = :2
+     WHEN NOT MATCHED THEN INSERT (setting_key, setting_value, category) VALUES (:3, :4, 'general')`,
+    [DELETED_KEYS_SETTING, value, DELETED_KEYS_SETTING, value]
+  );
+}
+
+function parseCriteria(json) {
+  try { return JSON.parse(json || '{}'); } catch { return {}; }
+}
+
+/**
+ * Siembra las insignias del catálogo que falten. Cada una lleva una `key` estable en su criterio,
+ * así que un admin puede renombrarla o editarla sin que se cree un duplicado, y si la elimina
+ * no se vuelve a crear.
+ */
 export async function ensureBadgeCatalog() {
-  const { rows } = await query('SELECT name FROM badges');
-  const existing = new Set(rows.map(r => String(r.name).toLowerCase()));
+  const { rows } = await query('SELECT id, name, criteria_json FROM badges');
+  const keys = new Set();
+  const byName = new Map();
+  for (const r of rows) {
+    const c = parseCriteria(r.criteria_json);
+    if (c.key) keys.add(c.key);
+    byName.set(String(r.name).toLowerCase(), { ...r, criteria: c });
+  }
+  const deleted = await getDeletedBadgeKeys();
+
   let created = 0;
   for (const b of BADGE_CATALOG) {
-    if (existing.has(b.name.toLowerCase())) continue;
+    const key = b.icon;
+    if (keys.has(key)) continue;
+
+    const sameName = byName.get(b.name.toLowerCase());
+    if (sameName) { // sembrada antes de que existieran las claves: se le agrega la clave
+      await query('UPDATE badges SET criteria_json = :1 WHERE id = :2', [JSON.stringify({ ...sameName.criteria, key }), sameName.id]);
+      continue;
+    }
+    if (deleted.has(key)) continue;
+
     await query(
       'INSERT INTO badges (name, description, icon_url, criteria_json) VALUES (:1, :2, :3, :4)',
-      [b.name, b.description, b.icon, JSON.stringify(b.criteria)]
+      [b.name, b.description, b.icon, JSON.stringify({ ...b.criteria, key })]
     );
     created++;
   }

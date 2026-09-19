@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import api from '../../../lib/api';
 import TargetSelector from '../../../components/TargetSelector';
+import BadgesAdmin from './BadgesAdmin';
 
 export default function AdminTraining() {
   const [tab, setTab] = useState('campaigns');
@@ -90,6 +91,7 @@ export default function AdminTraining() {
     { id: 'paths', label: 'Rutas de aprendizaje' },
     { id: 'progress', label: 'Progreso' },
     { id: 'notifications', label: 'Recordatorios' },
+    { id: 'badges', label: 'Insignias' },
   ];
 
   if (loading) return <div className="text-center py-12 text-gray-400">Cargando...</div>;
@@ -264,6 +266,7 @@ export default function AdminTraining() {
 
       {/* ============ NOTIFICATIONS TAB ============ */}
       {tab === 'notifications' && <NotificationsPanel />}
+      {tab === 'badges' && <BadgesAdmin />}
 
       {/* ============ MODAL: Nueva/Editar Ruta ============ */}
       {showNewPath && (
