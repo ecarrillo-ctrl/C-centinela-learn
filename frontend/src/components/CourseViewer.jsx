@@ -452,21 +452,27 @@ export default function CourseViewer({ course, onClose }) {
 function getEmbedUrl(idOrUrl) {
   if (!idOrUrl) return '';
   const str = String(idOrUrl).trim();
-  // Already a YouTube embed URL
-  if (str.includes('youtube.com/embed/')) return str;
-  // YouTube watch URL
-  const ytWatch = str.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/);
-  if (ytWatch) return `https://www.youtube.com/embed/${ytWatch[1]}?rel=0`;
-  // YouTube short URL
-  const ytShort = str.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
-  if (ytShort) return `https://www.youtube.com/embed/${ytShort[1]}?rel=0`;
-  // Vimeo
-  const vimeo = str.match(/vimeo\.com\/(\d+)/);
-  if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
-  // Just a video ID (11 chars)
+  // Solo el ID de YouTube (11 caracteres)
   if (/^[a-zA-Z0-9_-]{11}$/.test(str)) return `https://www.youtube.com/embed/${str}?rel=0`;
-  // Sin un enlace de video reconocible no hay nada que incrustar
-  return /^https?:\/\//.test(str) ? str : '';
+
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(str) ? str : `https://${str}`); } catch { return ''; }
+  const host = u.hostname.replace(/^(www|m|music)\./, '');
+  const seg = u.pathname.split('/').filter(Boolean);
+  const isId = s => /^[a-zA-Z0-9_-]{11}$/.test(s || '');
+
+  if (host === 'youtu.be' && isId(seg[0])) return `https://www.youtube.com/embed/${seg[0]}?rel=0`;
+  if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    const v = u.searchParams.get('v');
+    if (isId(v)) return `https://www.youtube.com/embed/${v}?rel=0`;
+    if (['embed', 'shorts', 'live', 'v'].includes(seg[0]) && isId(seg[1])) return `https://www.youtube.com/embed/${seg[1]}?rel=0`;
+    const list = u.searchParams.get('list');
+    if (seg[0] === 'playlist' && list) return `https://www.youtube.com/embed/videoseries?list=${encodeURIComponent(list)}`;
+  }
+  const vimeo = str.match(/vimeo\.com\/(?:video\/)?(\d+)/);
+  if (vimeo) return `https://player.vimeo.com/video/${vimeo[1]}`;
+  // Cualquier otra página (p. ej. una URL de YouTube que no es de video) rechazaría ser incrustada
+  return '';
 }
 
 function StepDot({ active, done, label }) {
