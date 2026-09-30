@@ -8,6 +8,39 @@ import { sendEmail } from '../services/mailer.js';
 
 const router = Router();
 
+const QUESTION_TYPES = ['multiple_choice', 'multiple_select', 'true_false', 'open_text'];
+
+// Marca la(s) inscripción(es) de un curso como completadas. Usa UPDATE primero
+// (cubre el caso normal, incluyendo múltiples inscripciones por campaña) y solo
+// si no había ninguna fila (ej. un admin tomando el curso por su cuenta, sin
+// haber sido inscrito por una campaña — content.js no crea la inscripción para
+// admins) crea una propia, para que el diploma nunca falle por falta de fila.
+async function markEnrollmentCompleted(userId, courseId) {
+  const { rowsAffected } = await query(
+    `UPDATE training_enrollments SET status = 'completed', progress_pct = 100, completed_at = SYSTIMESTAMP
+     WHERE user_id = :1 AND course_id = :2 AND status != 'completed'`,
+    [userId, courseId]
+  );
+  if (rowsAffected > 0) return;
+
+  const { rows: existing } = await query(
+    "SELECT id FROM training_enrollments WHERE user_id = :1 AND course_id = :2 AND status = 'completed' FETCH FIRST 1 ROWS ONLY",
+    [userId, courseId]
+  );
+  if (existing.length > 0) return; // ya estaba completada — nada que hacer
+
+  await query(
+    `MERGE INTO training_enrollments te
+     USING (SELECT :1 AS user_id, :2 AS course_id FROM DUAL) src
+     ON (te.user_id = src.user_id AND te.course_id = src.course_id AND te.campaign_id IS NULL)
+     WHEN MATCHED THEN
+       UPDATE SET status = 'completed', progress_pct = 100, completed_at = SYSTIMESTAMP WHERE te.status != 'completed'
+     WHEN NOT MATCHED THEN
+       INSERT (user_id, course_id, status, progress_pct, completed_at) VALUES (src.user_id, src.course_id, 'completed', 100, SYSTIMESTAMP)`,
+    [userId, courseId]
+  );
+}
+
 // ============ ADMIN: Gestionar cuestionarios ============
 
 // Obtener preguntas de un curso
@@ -33,8 +66,12 @@ router.get('/admin/courses/:courseId/questions', authenticateToken, requireAdmin
 // Agregar pregunta a un curso
 router.post('/admin/courses/:courseId/questions', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { question_text, question_type, options, is_required } = req.body;
+    const { question_text, options, is_required } = req.body;
     if (!question_text) return res.status(400).json({ error: 'question_text es requerido' });
+    const question_type = QUESTION_TYPES.includes(req.body.question_type) ? req.body.question_type : 'multiple_choice';
+    if (question_type === 'multiple_choice' && Array.isArray(options) && options.filter(o => o?.correct).length > 1) {
+      return res.status(400).json({ error: 'Selección única solo admite una opción correcta. Use "Selección múltiple" para marcar varias.' });
+    }
 
     // Obtener el siguiente sort_order
     const { rows: maxOrder } = await query(
@@ -45,7 +82,7 @@ router.post('/admin/courses/:courseId/questions', authenticateToken, requireAdmi
 
     await query(
       'INSERT INTO course_questions (course_id, question_text, question_type, sort_order, is_required) VALUES (:1, :2, :3, :4, :5)',
-      [req.params.courseId, question_text, question_type || 'multiple_choice', sortOrder, is_required !== false ? 1 : 0]
+      [req.params.courseId, question_text, question_type, sortOrder, is_required !== false ? 1 : 0]
     );
 
     const { rows } = await query(
@@ -73,6 +110,7 @@ router.put('/admin/courses/:courseId/questions/:questionId', authenticateToken, 
   try {
     const { question_text, options } = req.body;
     if (!question_text) return res.status(400).json({ error: 'question_text requerido' });
+    const question_type = QUESTION_TYPES.includes(req.body.question_type) ? req.body.question_type : null;
 
     // Las opciones se validan antes de tocar nada, para no dejar la pregunta a medias.
     let cleanOptions = null;
@@ -80,10 +118,19 @@ router.put('/admin/courses/:courseId/questions/:questionId', authenticateToken, 
       cleanOptions = options.filter(o => o && String(o.text || '').trim());
       if (cleanOptions.length < 2) return res.status(400).json({ error: 'Agregue al menos 2 opciones' });
       if (!cleanOptions.some(o => o.correct)) return res.status(400).json({ error: 'Marque al menos una opción correcta' });
+      if (question_type === 'multiple_choice' && cleanOptions.filter(o => o.correct).length > 1) {
+        return res.status(400).json({ error: 'Selección única solo admite una opción correcta. Use "Selección múltiple" para marcar varias.' });
+      }
     }
 
-    const { rowsAffected } = await query('UPDATE course_questions SET question_text = :1 WHERE id = :2 AND course_id = :3',
-      [question_text, req.params.questionId, req.params.courseId]);
+    const { rowsAffected } = await query(
+      question_type
+        ? 'UPDATE course_questions SET question_text = :1, question_type = :2 WHERE id = :3 AND course_id = :4'
+        : 'UPDATE course_questions SET question_text = :1 WHERE id = :2 AND course_id = :3',
+      question_type
+        ? [question_text, question_type, req.params.questionId, req.params.courseId]
+        : [question_text, req.params.questionId, req.params.courseId]
+    );
     if (rowsAffected === 0) return res.status(404).json({ error: 'Pregunta no encontrada' });
 
     if (cleanOptions) {
@@ -132,12 +179,20 @@ router.get('/courses/:courseId/quiz', authenticateToken, async (req, res) => {
       'SELECT id, score, passed, attempted_at FROM user_quiz_attempts WHERE user_id = :1 AND course_id = :2 ORDER BY attempted_at DESC FETCH FIRST 1 ROWS ONLY',
       [req.user.id, req.params.courseId]
     );
+    const alreadyPassed = attempts.length > 0 && attempts[0].passed === 1;
+
+    // Auto-reparación: si ya aprobó pero por alguna razón la inscripción nunca
+    // quedó marcada como completada (ej. faltaba al momento de aprobar), se
+    // corrige aquí para que la descarga del diploma no falle.
+    if (alreadyPassed) {
+      markEnrollmentCompleted(req.user.id, req.params.courseId).catch(() => { });
+    }
 
     res.json({
       questions,
       has_quiz: questions.length > 0,
       last_attempt: attempts[0] || null,
-      already_passed: attempts.length > 0 && attempts[0].passed === 1,
+      already_passed: alreadyPassed,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -145,7 +200,7 @@ router.get('/courses/:courseId/quiz', authenticateToken, async (req, res) => {
 // Enviar respuestas del quiz
 router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res) => {
   try {
-    const { answers } = req.body; // [{question_id, selected_option_id}]
+    const { answers } = req.body; // [{question_id, selected_option_ids: [...]}] (selected_option_id singular también se acepta)
     if (!answers || !Array.isArray(answers)) return res.status(400).json({ error: 'answers (array) requerido' });
 
     const { rows: questions } = await query(
@@ -157,14 +212,22 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
     let total = questions.length;
 
     for (const answer of answers) {
-      if (!answer.question_id || !answer.selected_option_id) continue;
-      const { rows } = await query(
-        'SELECT is_correct FROM course_question_options WHERE id = :1 AND question_id = :2',
-        [answer.selected_option_id, answer.question_id]
+      const selectedIds = Array.isArray(answer.selected_option_ids)
+        ? answer.selected_option_ids.filter(Boolean)
+        : (answer.selected_option_id ? [answer.selected_option_id] : []);
+      if (!answer.question_id || selectedIds.length === 0) continue;
+
+      // Selección múltiple: correcto solo si el conjunto marcado coincide
+      // exactamente con el conjunto de opciones correctas de la pregunta.
+      const { rows: correctRows } = await query(
+        'SELECT id FROM course_question_options WHERE question_id = :1 AND is_correct = 1',
+        [answer.question_id]
       );
-      if (rows.length > 0 && rows[0].is_correct === 1) {
-        correct++;
-      }
+      const correctIds = correctRows.map(r => r.id).sort();
+      const selectedSorted = [...selectedIds].sort();
+      const isMatch = correctIds.length === selectedSorted.length
+        && correctIds.every((id, i) => id === selectedSorted[i]);
+      if (isMatch) correct++;
     }
 
     const score = total > 0 ? Math.round((correct / total) * 100) : 0;
@@ -177,11 +240,7 @@ router.post('/courses/:courseId/quiz/submit', authenticateToken, async (req, res
 
     // Si aprobó, actualizar enrollment a completed
     if (passed) {
-      await query(
-        `UPDATE training_enrollments SET status = 'completed', progress_pct = 100, completed_at = SYSTIMESTAMP
-         WHERE user_id = :1 AND course_id = :2 AND status != 'completed'`,
-        [req.user.id, req.params.courseId]
-      );
+      await markEnrollmentCompleted(req.user.id, req.params.courseId);
     }
 
     // Insignias: el intento ya está registrado, así que "Primer intento", "Héroe cibernético",
@@ -228,11 +287,7 @@ router.post('/courses/:courseId/acknowledge', authenticateToken, async (req, res
 
     if (parseInt(questions[0]?.cnt || 0) === 0) {
       // No hay quiz — marcar como completado directamente
-      await query(
-        `UPDATE training_enrollments SET status = 'completed', progress_pct = 100, completed_at = SYSTIMESTAMP
-         WHERE user_id = :1 AND course_id = :2 AND status != 'completed'`,
-        [req.user.id, req.params.courseId]
-      );
+      await markEnrollmentCompleted(req.user.id, req.params.courseId);
     }
 
     const newBadges = await evaluateBadgesSafe(req.user.id);

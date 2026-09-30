@@ -39,7 +39,7 @@ export default function AdminContent() {
   const [editingQuestionId, setEditingQuestionId] = useState(null); // null = pregunta nueva
   const [editingCourse, setEditingCourse] = useState(null);
   const [uploadPct, setUploadPct] = useState(null); // null = sin subida en curso
-  const [qForm, setQForm] = useState({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
+  const [qForm, setQForm] = useState({ question_text: '', question_type: 'multiple_choice', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
 
   useEffect(() => {
     api.get('/admin/content').then(r => setCourses(r.data.data || [])).catch(() => { });
@@ -113,9 +113,13 @@ export default function AdminContent() {
     const validOptions = qForm.options.filter(o => o.text.trim());
     if (validOptions.length < 2) { alert('Agregue al menos 2 opciones'); return; }
     if (!validOptions.some(o => o.correct)) { alert('Marque al menos una opción correcta'); return; }
+    if (qForm.question_type === 'multiple_choice' && validOptions.filter(o => o.correct).length > 1) {
+      alert('Selección única solo admite una opción correcta. Cambie a "Selección múltiple" para marcar varias.');
+      return;
+    }
     const body = {
       question_text: qForm.question_text,
-      question_type: 'multiple_choice',
+      question_type: qForm.question_type,
       options: validOptions.map(o => ({ text: o.text, correct: o.correct })),
     };
     try {
@@ -123,7 +127,7 @@ export default function AdminContent() {
       else await api.post(`/admin/courses/${selectedCourse.id}/questions`, body);
       setEditingQuestionId(null);
       setShowNewQuestion(false);
-      setQForm({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
+      setQForm({ question_text: '', question_type: 'multiple_choice', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
       selectCourse(selectedCourse);
     } catch (err) { alert(err.response?.data?.error || 'Error'); }
   }
@@ -236,7 +240,7 @@ export default function AdminContent() {
             <div className="flex gap-2">
               <button onClick={() => {
                 setEditingQuestionId(null);
-                setQForm({ question_text: '', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
+                setQForm({ question_text: '', question_type: 'multiple_choice', options: [{ text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }, { text: '', correct: false }] });
                 setShowNewQuestion(true);
               }}
                 className="px-3 py-2 rounded-lg text-white text-xs font-medium" style={{ backgroundColor: '#00BC70' }}>
@@ -292,12 +296,18 @@ export default function AdminContent() {
               {questions.map((q, i) => (
                 <div key={q.id} className="p-4 rounded-lg border border-gray-100">
                   <div className="flex justify-between items-start gap-2">
-                    <p className="text-sm font-medium flex-1" style={{ color: '#001B71' }}>{i + 1}. {q.question_text}</p>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium" style={{ color: '#001B71' }}>{i + 1}. {q.question_text}</p>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 inline-block mt-1">
+                        {q.question_type === 'multiple_select' ? 'Selección múltiple' : 'Selección única'}
+                      </span>
+                    </div>
                     <div className="flex gap-1 shrink-0">
                       <button onClick={() => {
                         setEditingQuestionId(q.id);
                         setQForm({
                           question_text: q.question_text,
+                          question_type: q.question_type === 'multiple_select' ? 'multiple_select' : 'multiple_choice',
                           options: (q.options || []).map(o => ({ text: o.option_text, correct: Number(o.is_correct) === 1 })),
                         });
                         setShowNewQuestion(true);
@@ -354,15 +364,47 @@ export default function AdminContent() {
                   className="w-full border rounded-lg px-3 py-2 text-sm h-20" required placeholder="¿Cuál de las siguientes es una buena práctica?" />
               </div>
               <div>
+                <label className="block text-xs font-medium text-gray-600 mb-2">Tipo de pregunta</label>
+                <div className="flex gap-2">
+                  {[
+                    { id: 'multiple_choice', label: 'Selección única', hint: 'Una sola respuesta correcta' },
+                    { id: 'multiple_select', label: 'Selección múltiple', hint: 'Varias respuestas correctas' },
+                  ].map(t => (
+                    <button key={t.id} type="button"
+                      onClick={() => {
+                        // Al pasar a única, deja marcada solo la primera opción que estaba correcta.
+                        const opts = t.id === 'multiple_choice'
+                          ? (() => {
+                            const firstCorrect = qForm.options.findIndex(o => o.correct);
+                            return qForm.options.map((o, i) => ({ ...o, correct: i === firstCorrect }));
+                          })()
+                          : qForm.options;
+                        setQForm({ ...qForm, question_type: t.id, options: opts });
+                      }}
+                      className={`flex-1 text-left p-2.5 rounded-lg border-2 transition-colors ${qForm.question_type === t.id ? 'border-[#001B71] bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                      <p className="text-xs font-semibold" style={{ color: '#001B71' }}>{t.label}</p>
+                      <p className="text-[10px] text-gray-400">{t.hint}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-gray-600 mb-2">Opciones de respuesta</label>
-                <p className="text-xs text-gray-400 mb-2">Marque la(s) correcta(s) con el checkbox</p>
+                <p className="text-xs text-gray-400 mb-2">
+                  {qForm.question_type === 'multiple_select'
+                    ? 'Marque todas las opciones correctas con el checkbox.'
+                    : 'Marque la única opción correcta con el checkbox.'}
+                </p>
                 <div className="space-y-2">
                   {qForm.options.map((opt, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <input type="checkbox" checked={opt.correct}
                         onChange={e => {
-                          const opts = [...qForm.options];
-                          opts[i] = { ...opts[i], correct: e.target.checked };
+                          const checked = e.target.checked;
+                          const opts = qForm.question_type === 'multiple_choice'
+                            // Única: marcar esta desmarca las demás (comportamiento de radio).
+                            ? qForm.options.map((o, oi) => ({ ...o, correct: oi === i ? checked : false }))
+                            : qForm.options.map((o, oi) => oi === i ? { ...o, correct: checked } : o);
                           setQForm({ ...qForm, options: opts });
                         }} className="w-4 h-4 rounded" />
                       <input value={opt.text} onChange={e => {

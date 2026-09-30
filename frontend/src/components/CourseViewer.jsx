@@ -69,6 +69,37 @@ export default function CourseViewer({ course, onClose }) {
     }, 600);
   }
 
+  // Selección múltiple: alterna la opción dentro del arreglo de respuestas de
+  // la pregunta, sin bloquear ni avanzar automáticamente (el usuario puede
+  // marcar varias antes de continuar con "Siguiente").
+  function toggleAnswer(qId, optId) {
+    if (lockedQuestions.has(qId)) return;
+    setAnswers(prev => {
+      const current = Array.isArray(prev[qId]) ? prev[qId] : [];
+      const next = current.includes(optId) ? current.filter(id => id !== optId) : [...current, optId];
+      const copy = { ...prev };
+      if (next.length === 0) delete copy[qId];
+      else copy[qId] = next;
+      return copy;
+    });
+  }
+
+  function isAnswered(qId) {
+    const a = answers[qId];
+    return Array.isArray(a) ? a.length > 0 : a !== undefined;
+  }
+
+  // Bloquea la pregunta actual (si no lo estaba ya) y avanza — usado por el
+  // botón "Siguiente" para preguntas de selección múltiple, que no se
+  // bloquean automáticamente al marcar la primera opción.
+  function advance() {
+    const qId = quiz.questions[currentQ]?.id || quiz.questions[currentQ]?.ID;
+    if (qId && !lockedQuestions.has(qId)) {
+      setLockedQuestions(prev => new Set([...prev, qId]));
+    }
+    if (currentQ < quiz.questions.length - 1) setCurrentQ(currentQ + 1);
+  }
+
   async function submitQuiz() {
     if (!quiz?.questions) return;
     const total = quiz.questions.length;
@@ -79,8 +110,9 @@ export default function CourseViewer({ course, onClose }) {
     }
     setSubmitting(true);
     try {
-      const payload = Object.entries(answers).map(([question_id, selected_option_id]) => ({
-        question_id, selected_option_id,
+      const payload = Object.entries(answers).map(([question_id, selected]) => ({
+        question_id,
+        selected_option_ids: Array.isArray(selected) ? selected : [selected],
       }));
       const { data } = await api.post(`/courses/${courseId}/quiz/submit`, { answers: payload });
       setQuizResult(data);
@@ -245,12 +277,17 @@ export default function CourseViewer({ course, onClose }) {
                 const qId = q.id || q.ID;
                 const options = q.options || [];
                 const isLocked = lockedQuestions.has(qId);
+                const isMulti = (q.question_type || q.QUESTION_TYPE) === 'multiple_select';
+                const selectedIds = isMulti ? (Array.isArray(answers[qId]) ? answers[qId] : []) : null;
                 return (
                   <div key={qId}>
                     <div className="mb-6 text-center">
                       <span className="text-xs text-white/40 uppercase tracking-widest">
                         Pregunta {qi + 1} de {quiz.questions.length}
                       </span>
+                      {isMulti && (
+                        <span className="ml-2 text-xs text-amber-300">{'☑'} Seleccione todas las que apliquen</span>
+                      )}
                       {isLocked && (
                         <span className="ml-2 text-xs text-green-400">{'\u{1F512}'} Respuesta registrada</span>
                       )}
@@ -262,11 +299,11 @@ export default function CourseViewer({ course, onClose }) {
                       <div className="space-y-3">
                         {options.map((opt, oi) => {
                           const optId = opt.id || opt.ID;
-                          const selected = answers[qId] === optId;
+                          const selected = isMulti ? selectedIds.includes(optId) : answers[qId] === optId;
                           const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
                           return (
                             <button key={optId}
-                              onClick={() => selectAnswer(qId, optId)}
+                              onClick={() => isMulti ? toggleAnswer(qId, optId) : selectAnswer(qId, optId)}
                               disabled={isLocked}
                               className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4 ${selected
                                 ? 'border-[#001B71] bg-blue-50 shadow-md'
@@ -274,12 +311,17 @@ export default function CourseViewer({ course, onClose }) {
                                   ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
                                   : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50 cursor-pointer'
                                 }`}>
-                              <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${selected ? 'bg-[#001B71] text-white' : 'bg-gray-100 text-gray-500'
-                                }`}>{letters[oi]}</span>
+                              {isMulti ? (
+                                <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 border-2 ${selected ? 'bg-[#001B71] border-[#001B71] text-white' : 'border-gray-300 text-transparent'
+                                  }`}>{'\u2713'}</span>
+                              ) : (
+                                <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${selected ? 'bg-[#001B71] text-white' : 'bg-gray-100 text-gray-500'
+                                  }`}>{letters[oi]}</span>
+                              )}
                               <span className={`text-sm ${selected ? 'font-medium text-[#001B71]' : 'text-gray-700'}`}>
                                 {opt.option_text || opt.OPTION_TEXT}
                               </span>
-                              {selected && <span className="ml-auto text-[#001B71]">{'\u2713'}</span>}
+                              {selected && !isMulti && <span className="ml-auto text-[#001B71]">{'\u2713'}</span>}
                             </button>
                           );
                         })}
@@ -306,7 +348,7 @@ export default function CourseViewer({ course, onClose }) {
                 <div className="flex gap-1.5">
                   {quiz.questions.map((q, i) => {
                     const qId = q.id || q.ID;
-                    const answered = !!answers[qId];
+                    const answered = isAnswered(qId);
                     return (
                       <div key={i}
                         className={`w-3 h-3 rounded-full transition-all ${i === currentQ ? 'bg-white scale-125 ring-2 ring-white/50'
@@ -318,8 +360,8 @@ export default function CourseViewer({ course, onClose }) {
                 </div>
 
                 {currentQ < quiz.questions.length - 1 ? (
-                  <button onClick={() => setCurrentQ(currentQ + 1)}
-                    disabled={!lockedQuestions.has(quiz.questions[currentQ]?.id || quiz.questions[currentQ]?.ID)}
+                  <button onClick={advance}
+                    disabled={!isAnswered(quiz.questions[currentQ]?.id || quiz.questions[currentQ]?.ID)}
                     className="px-5 py-2.5 rounded-lg text-sm font-medium bg-white/10 text-white hover:bg-white/20 disabled:opacity-20 disabled:cursor-not-allowed">
                     Siguiente {'\u2192'}
                   </button>
