@@ -89,6 +89,7 @@ export default function AdminTraining() {
   const tabs = [
     { id: 'campaigns', label: 'Campañas' },
     { id: 'paths', label: 'Rutas de aprendizaje' },
+    { id: 'assign', label: 'Asignación individual' },
     { id: 'progress', label: 'Progreso' },
     { id: 'notifications', label: 'Recordatorios' },
     { id: 'badges', label: 'Insignias' },
@@ -224,6 +225,9 @@ export default function AdminTraining() {
         </div>
       )}
 
+      {/* ============ ASIGNACIÓN INDIVIDUAL TAB ============ */}
+      {tab === 'assign' && <EnrollmentsPanel courses={courses} />}
+
       {/* ============ PROGRESS TAB ============ */}
       {tab === 'progress' && (
         <div className="space-y-4">
@@ -358,6 +362,130 @@ export default function AdminTraining() {
         )
       }
     </div >
+  );
+}
+
+function EnrollmentsPanel({ courses }) {
+  const [userSearch, setUserSearch] = useState('');
+  const [userResults, setUserResults] = useState([]);
+  const [selectedUsers, setSelectedUsers] = useState([]); // [{id, display_name, email}]
+  const [selectedCourses, setSelectedCourses] = useState(new Set());
+  const [working, setWorking] = useState(false);
+
+  async function searchUsers(q) {
+    setUserSearch(q);
+    if (q.length < 2) { setUserResults([]); return; }
+    try {
+      const { data } = await api.get(`/admin/users?search=${encodeURIComponent(q)}&limit=20&status=active`);
+      setUserResults(data.data || []);
+    } catch { setUserResults([]); }
+  }
+
+  function toggleUser(u) {
+    setSelectedUsers(prev => prev.some(x => x.id === u.id) ? prev.filter(x => x.id !== u.id) : [...prev, u]);
+  }
+
+  function toggleCourse(id) {
+    setSelectedCourses(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function run(action) {
+    if (selectedUsers.length === 0) return alert('Seleccione al menos un usuario');
+    if (selectedCourses.size === 0) return alert('Seleccione al menos una capacitación');
+    const verb = action === 'assign' ? 'asignar' : 'quitar';
+    if (!confirm(`¿${verb.charAt(0).toUpperCase() + verb.slice(1)} ${selectedCourses.size} capacitación(es) ${action === 'assign' ? 'a' : 'de'} ${selectedUsers.length} usuario(s)?`)) return;
+    setWorking(true);
+    try {
+      const { data } = await api.post(`/admin/enrollments/${action}`, {
+        user_ids: selectedUsers.map(u => u.id),
+        course_ids: [...selectedCourses],
+      });
+      if (action === 'assign') {
+        alert(`Listo: ${data.created} asignación(es) nueva(s) creada(s) de ${data.total} combinaciones (las ya existentes no se duplican).`);
+      } else {
+        alert(`Listo: ${data.removed} inscripción(es) eliminada(s).`);
+      }
+      setSelectedUsers([]);
+      setSelectedCourses(new Set());
+    } catch (err) { alert(err.response?.data?.error || 'Error'); }
+    setWorking(false);
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-gray-500 max-w-2xl">
+        Asigne o quite capacitaciones puntuales a uno o varios usuarios, sin necesidad de crear una campaña.
+        Útil para corregir una asignación individual o para que alguien repita un curso desde cero.
+      </p>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h3 className="font-title font-bold mb-3" style={{ color: '#001B71' }}>1. Usuarios</h3>
+          <input value={userSearch} onChange={e => searchUsers(e.target.value)}
+            placeholder="Buscar usuario por nombre o correo..."
+            className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
+
+          {selectedUsers.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-2">
+              {selectedUsers.map(u => (
+                <span key={u.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">
+                  {u.display_name}
+                  <button type="button" onClick={() => toggleUser(u)} className="text-blue-500 hover:text-blue-800 font-bold">{'×'}</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="max-h-56 overflow-auto space-y-1">
+            {userResults.map(u => {
+              const checked = selectedUsers.some(x => x.id === u.id);
+              return (
+                <label key={u.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors text-sm ${checked ? 'border-blue-300 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleUser(u)} className="w-4 h-4 rounded" />
+                  <span>
+                    <span className="font-medium">{u.display_name}</span>
+                    <span className="text-xs text-gray-400 ml-1">({u.email})</span>
+                  </span>
+                </label>
+              );
+            })}
+            {userSearch.length >= 2 && userResults.length === 0 && <p className="text-xs text-gray-400 text-center py-2">No se encontraron usuarios</p>}
+            {userSearch.length < 2 && <p className="text-xs text-gray-400 text-center py-2">Escriba al menos 2 caracteres para buscar</p>}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <h3 className="font-title font-bold mb-3" style={{ color: '#001B71' }}>2. Capacitaciones</h3>
+          <div className="max-h-72 overflow-auto space-y-1">
+            {courses.map(c => {
+              const checked = selectedCourses.has(c.id);
+              return (
+                <label key={c.id} className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-colors text-sm ${checked ? 'border-blue-300 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleCourse(c.id)} className="w-4 h-4 rounded" />
+                  <span>{c.title}</span>
+                </label>
+              );
+            })}
+            {courses.length === 0 && <p className="text-xs text-gray-400 text-center py-2">No hay capacitaciones. Suba contenido primero.</p>}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-3">
+        <button onClick={() => run('assign')} disabled={working}
+          className="px-5 py-2.5 rounded-lg text-white text-sm font-medium disabled:opacity-50" style={{ backgroundColor: '#00BC70' }}>
+          {working ? 'Procesando...' : `+ Asignar a ${selectedUsers.length} usuario(s)`}
+        </button>
+        <button onClick={() => run('remove')} disabled={working}
+          className="px-5 py-2.5 rounded-lg text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 disabled:opacity-50">
+          {working ? 'Procesando...' : `Quitar de ${selectedUsers.length} usuario(s)`}
+        </button>
+      </div>
+    </div>
   );
 }
 

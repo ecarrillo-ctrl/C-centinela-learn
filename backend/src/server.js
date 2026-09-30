@@ -318,6 +318,72 @@ app.delete('/api/admin/training-campaigns/:id', authenticateToken, requireAdmin,
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============ Asignación manual de capacitaciones (fuera de una campaña) ============
+// Permite al admin agregar o quitar capacitaciones puntuales a uno o varios
+// usuarios, sin pasar por el flujo de campañas (pensado para casos sueltos:
+// re-asignar un curso a alguien que lo necesita repetir, o quitarle uno que
+// se le asignó por error).
+app.post('/api/admin/enrollments/assign', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { user_ids, course_ids } = req.body || {};
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return res.status(400).json({ error: 'user_ids es requerido' });
+    if (!Array.isArray(course_ids) || course_ids.length === 0) return res.status(400).json({ error: 'course_ids es requerido' });
+
+    let created = 0;
+    for (const userId of user_ids) {
+      for (const courseId of course_ids) {
+        // Solo inserta si no existe ya una inscripción manual (campaign_id NULL)
+        // para ese par usuario/curso — no toca inscripciones creadas por campañas.
+        const { rowsAffected } = await query(
+          `MERGE INTO training_enrollments te
+           USING (SELECT :1 AS user_id, :2 AS course_id FROM DUAL) src
+           ON (te.user_id = src.user_id AND te.course_id = src.course_id AND te.campaign_id IS NULL)
+           WHEN NOT MATCHED THEN
+             INSERT (user_id, course_id, status) VALUES (src.user_id, src.course_id, 'assigned')`,
+          [userId, courseId]
+        );
+        created += rowsAffected;
+      }
+    }
+
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type, details_json)
+       VALUES (:1, 'training_manual_assign', 'training_enrollment', :2)`,
+      [req.user.id, JSON.stringify({ user_count: user_ids.length, course_count: course_ids.length, created })]
+    );
+
+    res.json({ success: true, created, total: user_ids.length * course_ids.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/admin/enrollments/remove', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { user_ids, course_ids } = req.body || {};
+    if (!Array.isArray(user_ids) || user_ids.length === 0) return res.status(400).json({ error: 'user_ids es requerido' });
+    if (!Array.isArray(course_ids) || course_ids.length === 0) return res.status(400).json({ error: 'course_ids es requerido' });
+
+    let removed = 0;
+    for (const userId of user_ids) {
+      for (const courseId of course_ids) {
+        // Elimina cualquier inscripción de ese usuario/curso, venga de campaña o manual.
+        const { rowsAffected } = await query(
+          'DELETE FROM training_enrollments WHERE user_id = :1 AND course_id = :2',
+          [userId, courseId]
+        );
+        removed += rowsAffected;
+      }
+    }
+
+    await query(
+      `INSERT INTO audit_log (actor_id, action, entity_type, details_json)
+       VALUES (:1, 'training_manual_remove', 'training_enrollment', :2)`,
+      [req.user.id, JSON.stringify({ user_count: user_ids.length, course_count: course_ids.length, removed })]
+    );
+
+    res.json({ success: true, removed });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ============ Notificaciones (manual trigger por admin) ============
 app.post('/api/admin/notifications/upcoming', authenticateToken, requireAdmin, async (_req, res) => {
   try {
