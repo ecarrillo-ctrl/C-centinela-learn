@@ -346,13 +346,23 @@ app.post('/api/admin/enrollments/assign', authenticateToken, requireAdmin, async
       }
     }
 
+    // Se registran los IDs exactos (no solo conteos) para poder auditar
+    // después exactamente a quién se le asignó qué, ante cualquier duda.
     await query(
       `INSERT INTO audit_log (actor_id, action, entity_type, details_json)
        VALUES (:1, 'training_manual_assign', 'training_enrollment', :2)`,
-      [req.user.id, JSON.stringify({ user_count: user_ids.length, course_count: course_ids.length, created })]
+      [req.user.id, JSON.stringify({ user_ids, course_ids, created })]
     );
 
-    res.json({ success: true, created, total: user_ids.length * course_ids.length });
+    const [{ rows: userRows }, { rows: courseRows }] = await Promise.all([
+      query(`SELECT id, display_name FROM users WHERE id IN (${user_ids.map((_, i) => `:${i + 1}`).join(',')})`, user_ids),
+      query(`SELECT id, title FROM courses WHERE id IN (${course_ids.map((_, i) => `:${i + 1}`).join(',')})`, course_ids),
+    ]);
+
+    res.json({
+      success: true, created, total: user_ids.length * course_ids.length,
+      users: userRows.map(u => u.display_name), courses: courseRows.map(c => c.title),
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -377,10 +387,18 @@ app.post('/api/admin/enrollments/remove', authenticateToken, requireAdmin, async
     await query(
       `INSERT INTO audit_log (actor_id, action, entity_type, details_json)
        VALUES (:1, 'training_manual_remove', 'training_enrollment', :2)`,
-      [req.user.id, JSON.stringify({ user_count: user_ids.length, course_count: course_ids.length, removed })]
+      [req.user.id, JSON.stringify({ user_ids, course_ids, removed })]
     );
 
-    res.json({ success: true, removed });
+    const [{ rows: userRows }, { rows: courseRows }] = await Promise.all([
+      query(`SELECT id, display_name FROM users WHERE id IN (${user_ids.map((_, i) => `:${i + 1}`).join(',')})`, user_ids),
+      query(`SELECT id, title FROM courses WHERE id IN (${course_ids.map((_, i) => `:${i + 1}`).join(',')})`, course_ids),
+    ]);
+
+    res.json({
+      success: true, removed,
+      users: userRows.map(u => u.display_name), courses: courseRows.map(c => c.title),
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

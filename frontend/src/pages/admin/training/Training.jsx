@@ -397,17 +397,20 @@ function EnrollmentsPanel({ courses }) {
     if (selectedUsers.length === 0) return alert('Seleccione al menos un usuario');
     if (selectedCourses.size === 0) return alert('Seleccione al menos una capacitación');
     const verb = action === 'assign' ? 'asignar' : 'quitar';
-    if (!confirm(`¿${verb.charAt(0).toUpperCase() + verb.slice(1)} ${selectedCourses.size} capacitación(es) ${action === 'assign' ? 'a' : 'de'} ${selectedUsers.length} usuario(s)?`)) return;
+    const courseNames = courses.filter(c => selectedCourses.has(c.id)).map(c => c.title).join(', ');
+    const userNames = selectedUsers.map(u => u.display_name).join(', ');
+    if (!confirm(`¿${verb.charAt(0).toUpperCase() + verb.slice(1)}:\n\nCapacitación(es): ${courseNames}\n\n${action === 'assign' ? 'A' : 'De'} usuario(s): ${userNames}`)) return;
     setWorking(true);
     try {
       const { data } = await api.post(`/admin/enrollments/${action}`, {
         user_ids: selectedUsers.map(u => u.id),
         course_ids: [...selectedCourses],
       });
+      const affected = `Capacitación(es): ${(data.courses || []).join(', ')}\nUsuario(s): ${(data.users || []).join(', ')}`;
       if (action === 'assign') {
-        alert(`Listo: ${data.created} asignación(es) nueva(s) creada(s) de ${data.total} combinaciones (las ya existentes no se duplican).`);
+        alert(`Listo: ${data.created} asignación(es) nueva(s) creada(s) de ${data.total} combinaciones (las ya existentes no se duplican).\n\n${affected}`);
       } else {
-        alert(`Listo: ${data.removed} inscripción(es) eliminada(s).`);
+        alert(`Listo: ${data.removed} inscripción(es) eliminada(s).\n\n${affected}`);
       }
       setSelectedUsers([]);
       setSelectedCourses(new Set());
