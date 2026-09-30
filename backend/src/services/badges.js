@@ -73,7 +73,7 @@ export const BADGE_CATALOG = [
 export const BADGE_CRITERIA_TYPES = [
   'first_login', 'courses_completed', 'first_attempt_pass', 'courses_in_window', 'completed_hour_range',
   'pab_count', 'reported_simulated', 'no_clicks_min_campaigns', 'all_courses_completed', 'learning_path',
-  'diploma_downloaded', 'zero_clicks',
+  'diploma_downloaded', 'zero_clicks', 'specific_courses',
 ];
 
 const DELETED_KEYS_SETTING = 'badges_deleted_keys';
@@ -215,6 +215,18 @@ async function checkCriteria(userId, criteria, ctx) {
       );
       const total = parseInt(rows[0]?.total || 0, 10);
       return { earned: total > 0 && total === parseInt(rows[0]?.done || 0, 10) };
+    }
+    case 'specific_courses': {
+      const ids = Array.isArray(criteria.course_ids) ? criteria.course_ids.filter(Boolean) : [];
+      if (ids.length === 0) return { earned: false };
+      const placeholders = ids.map((_, i) => `:${i + 2}`).join(',');
+      const { rows } = await query(
+        `SELECT MIN(completed_at) AS first_at FROM training_enrollments
+         WHERE user_id = :1 AND status = 'completed' AND completed_at IS NOT NULL
+           AND course_id IN (${placeholders})`,
+        [userId, ...ids]
+      );
+      return rows[0]?.first_at ? { earned: true, at: rows[0].first_at } : { earned: false };
     }
     case 'learning_path': {
       if (!criteria.path_id) return { earned: false };

@@ -10,6 +10,7 @@ const CRITERIA = [
   { type: 'completed_hour_range', label: 'Completar una capacitación en cierto horario (hora de Guatemala)', fields: [{ key: 'from', label: 'Desde (hora 0-23)', def: 5 }, { key: 'to', label: 'Hasta (hora 0-23, sin incluir)', def: 8 }] },
   { type: 'all_courses_completed', label: 'Completar todas las capacitaciones asignadas', fields: [] },
   { type: 'learning_path', label: 'Completar una ruta de aprendizaje', fields: [], pathSelect: true },
+  { type: 'specific_courses', label: 'Completar una capacitación específica', fields: [], courseSelect: true },
   { type: 'first_login', label: 'Ingresar a la plataforma por primera vez', fields: [] },
   { type: 'diploma_downloaded', label: 'Descargar un diploma', fields: [] },
   { type: 'pab_count', label: 'Reportar N correos sospechosos con el PAB', fields: [{ key: 'min', label: 'Reportes', def: 1 }] },
@@ -18,7 +19,7 @@ const CRITERIA = [
   { type: 'no_clicks_min_campaigns', label: 'Recibir N campañas de phishing sin dar clic en ninguna', fields: [{ key: 'min', label: 'Campañas', def: 3 }] },
 ];
 
-function describe(criteria, paths) {
+function describe(criteria, paths, courses) {
   const def = CRITERIA.find(c => c.type === criteria?.type);
   if (!def) return 'Criterio no reconocido';
   let text = def.label;
@@ -30,20 +31,30 @@ function describe(criteria, paths) {
     const p = paths.find(x => x.id === criteria.path_id);
     text += ` — ${p ? p.name : 'ruta no seleccionada'}`;
   }
+  if (def.courseSelect) {
+    const ids = Array.isArray(criteria.course_ids) ? criteria.course_ids : [];
+    const names = ids.map(id => courses.find(c => c.id === id)?.title).filter(Boolean);
+    text += ` — ${names.length ? names.join(', ') : 'sin capacitación seleccionada'}`;
+  }
   return text;
 }
 
-const EMPTY_FORM = { name: '', description: '', hint: '', icon: 'medal', customUrl: '', type: 'courses_completed', params: { min: 1 }, path_id: '' };
+const EMPTY_FORM = { name: '', description: '', hint: '', icon: 'medal', customUrl: '', type: 'courses_completed', params: { min: 1 }, path_id: '', course_ids: [] };
 
 export default function BadgesAdmin() {
   const [badges, setBadges] = useState([]);
   const [paths, setPaths] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // null = cerrado, 'new' o un id
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { load(); api.get('/admin/learning-paths').then(r => setPaths(r.data.data || [])).catch(() => { }); }, []);
+  useEffect(() => {
+    load();
+    api.get('/admin/learning-paths').then(r => setPaths(r.data.data || [])).catch(() => { });
+    api.get('/admin/content?limit=500').then(r => setCourses(r.data.data || [])).catch(() => { });
+  }, []);
 
   function load() {
     setLoading(true);
@@ -71,6 +82,7 @@ export default function BadgesAdmin() {
       name: b.name, description: b.description || '', hint: b.criteria.hint || '',
       icon: isUrl ? '' : (b.icon_url || 'medal'), customUrl: isUrl ? b.icon_url : '',
       type: def.type, params, path_id: b.criteria.path_id || '',
+      course_ids: Array.isArray(b.criteria.course_ids) ? b.criteria.course_ids : [],
     });
     setEditing(b.id);
   }
@@ -79,17 +91,26 @@ export default function BadgesAdmin() {
     const def = CRITERIA.find(c => c.type === type);
     const params = {};
     def.fields.forEach(f => { params[f.key] = f.def; });
-    setForm({ ...form, type, params, path_id: '' });
+    setForm({ ...form, type, params, path_id: '', course_ids: [] });
+  }
+
+  function toggleCourse(id) {
+    setForm(f => ({
+      ...f,
+      course_ids: f.course_ids.includes(id) ? f.course_ids.filter(x => x !== id) : [...f.course_ids, id],
+    }));
   }
 
   async function save(e) {
     e.preventDefault();
     const def = CRITERIA.find(c => c.type === form.type);
     if (def.pathSelect && !form.path_id) { alert('Seleccione la ruta de aprendizaje'); return; }
+    if (def.courseSelect && form.course_ids.length === 0) { alert('Seleccione al menos una capacitación'); return; }
 
     const criteria = { type: form.type };
     def.fields.forEach(f => { criteria[f.key] = Number(form.params[f.key]); });
     if (def.pathSelect) criteria.path_id = form.path_id;
+    if (def.courseSelect) criteria.course_ids = form.course_ids;
     if (form.hint.trim()) criteria.hint = form.hint.trim();
 
     const payload = {
@@ -139,7 +160,7 @@ export default function BadgesAdmin() {
             <div className="flex-1 min-w-0">
               <p className="font-bold" style={{ color: '#001B71' }}>{b.name}</p>
               <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{b.description}</p>
-              <p className="text-xs text-gray-400 mt-2">{describe(b.criteria, paths)}</p>
+              <p className="text-xs text-gray-400 mt-2">{describe(b.criteria, paths, courses)}</p>
               <p className="text-xs mt-1" style={{ color: '#00BC70' }}>{b.earned_count || 0} usuario(s) la han ganado</p>
               <div className="flex gap-2 mt-3">
                 <button onClick={() => openEdit(b)} className="px-3 py-1 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50">Editar</button>
@@ -220,6 +241,21 @@ export default function BadgesAdmin() {
                       <option value="">Seleccionar ruta...</option>
                       {paths.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
+                  </div>
+                )}
+
+                {def.courseSelect && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Capacitaciones (se otorga al completar cualquiera de las marcadas)</label>
+                    <div className="border rounded-lg max-h-48 overflow-auto divide-y divide-gray-50">
+                      {courses.length === 0 && <p className="text-xs text-gray-400 p-3">No hay capacitaciones disponibles.</p>}
+                      {courses.map(c => (
+                        <label key={c.id} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-50 cursor-pointer">
+                          <input type="checkbox" checked={form.course_ids.includes(c.id)} onChange={() => toggleCourse(c.id)} className="w-4 h-4 rounded" />
+                          <span className="text-gray-700">{c.title}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
