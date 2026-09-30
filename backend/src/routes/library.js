@@ -202,6 +202,12 @@ router.get('/library/learning-paths', authenticateToken, async (req, res) => {
       'SELECT id, name, description FROM learning_paths WHERE is_active = 1 ORDER BY created_at DESC'
     );
 
+    // Un curso solo aparece si el usuario tiene una inscripción real para él
+    // (JOIN, no LEFT JOIN) — así, si un admin quita una capacitación desde
+    // "Asignación individual" o una campaña, desaparece de aquí, y si la
+    // vuelve a agregar, la fila es nueva y el progreso arranca en 0. Un mismo
+    // curso puede tener más de una inscripción (ej. una por campaña y otra
+    // manual): se toma una sola, priorizando la más avanzada.
     for (const p of paths) {
       const pathId = p.ID || p.id;
       const { rows: courses } = await query(
@@ -209,7 +215,15 @@ router.get('/library/learning-paths', authenticateToken, async (req, res) => {
                 te.status AS enrollment_status, te.progress_pct, te.completed_at
          FROM learning_path_courses lpc
          JOIN courses c ON lpc.course_id = c.id AND c.deleted_at IS NULL AND c.is_active = 1
-         LEFT JOIN training_enrollments te ON te.course_id = c.id AND te.user_id = :1
+         JOIN (
+           SELECT course_id, status, progress_pct, completed_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY course_id
+                    ORDER BY CASE status WHEN 'completed' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END, created_at DESC
+                  ) AS rn
+           FROM training_enrollments
+           WHERE user_id = :1
+         ) te ON te.course_id = c.id AND te.rn = 1
          WHERE lpc.path_id = :2
          ORDER BY lpc.sort_order`,
         [req.user.id, pathId]
@@ -218,7 +232,10 @@ router.get('/library/learning-paths', authenticateToken, async (req, res) => {
       p.all_completed = courses.length > 0 && courses.every(c => (c.ENROLLMENT_STATUS || c.enrollment_status) === 'completed');
     }
 
-    res.json({ data: paths });
+    // Una ruta solo se muestra si al menos uno de sus cursos está asignado al usuario.
+    const visiblePaths = paths.filter(p => (p.courses || []).length > 0);
+
+    res.json({ data: visiblePaths });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
